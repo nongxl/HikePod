@@ -12,6 +12,9 @@ public:
   // 初始化跟踪管理器
   void begin();
   
+  // 设置GNSS模块引用
+  void setGNSSModule(GNSSModule* gnss);
+  
   // 启动跟踪
   bool startTracking();
   
@@ -33,6 +36,9 @@ public:
 private:
   // 跟踪状态
   bool isTrackingEnabled;
+  
+  // GNSS模块引用
+  GNSSModule* gnssModule;
   
   // 轨迹文件
   File trackFile;

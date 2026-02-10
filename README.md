@@ -23,6 +23,10 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 #### 刷入固件说明
 - **刷入固件**：通过M5Bunner将固件文件刷入M5Stack Cardputer ADV
 - **使用说明**：请参考项目文档中的使用说明
+- **合并固件**：
+   esptool.py --chip esp32s3 merge_bin -o cardputer_factory.bin --flash_mode dio --flash_size 8MB 0x0000 .pio/build/m5stack-cardputer/bootloader.bin 0x8000 .pio/btack-cardputer/partitions.bin 0xe000 ./boot_app0.bin 0x10000 .pio/build/m5stack-cardputer/firmware.bin
+
+
 
 #### 基本操作
 
@@ -81,6 +85,7 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 ### 待解决问题
 - 按空格键自动平移到当前位置/路径起点的功能有时候无效（已增加锁定功能）
 - 电量消耗曲线不够平滑且会超出菜单范围
+- 增加USB模式方便存储kml文件
 
 ### 后续还考虑实现
 1. **航向显示**

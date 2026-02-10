@@ -4,6 +4,7 @@
 
 TrackingManager::TrackingManager() : 
   isTrackingEnabled(false),
+  gnssModule(nullptr),
   trackFile(),
   trackFileName(""),
   trackPoints(),
@@ -16,6 +17,10 @@ TrackingManager::TrackingManager() :
 void TrackingManager::begin() {
   // 确保tracks目录存在
   ensureTracksDirectoryExists();
+}
+
+void TrackingManager::setGNSSModule(GNSSModule* gnss) {
+  gnssModule = gnss;
 }
 
 bool TrackingManager::startTracking() {
@@ -140,36 +145,62 @@ double TrackingManager::calculateDistance(const Location& p1, const Location& p2
 }
 
 String TrackingManager::generateKMLFileName() const {
-  // 获取当前时间
-  time_t now = time(nullptr);
-  struct tm* timeinfo = gmtime(&now);
-  
-  // 使用更简单的方法生成文件名，避免strftime的问题
+  // 使用GPS时间生成文件名
   String fileName = "hikepod_track_";
   
-  // 添加年份
-  fileName += String(1900 + timeinfo->tm_year);
-  if (timeinfo->tm_mon + 1 < 10) {
-    fileName += "0";
+  if (gnssModule && gnssModule->isDateValid() && gnssModule->isTimeValid()) {
+    // 添加年份
+    fileName += String(gnssModule->getYear());
+    if (gnssModule->getMonth() < 10) {
+      fileName += "0";
+    }
+    fileName += String(gnssModule->getMonth());
+    if (gnssModule->getDay() < 10) {
+      fileName += "0";
+    }
+    fileName += String(gnssModule->getDay());
+    fileName += "_";
+    if (gnssModule->getHour() < 10) {
+      fileName += "0";
+    }
+    fileName += String(gnssModule->getHour());
+    if (gnssModule->getMinute() < 10) {
+      fileName += "0";
+    }
+    fileName += String(gnssModule->getMinute());
+    if (gnssModule->getSecond() < 10) {
+      fileName += "0";
+    }
+    fileName += String(gnssModule->getSecond());
+  } else {
+    // 如果GPS时间不可用，使用系统时间
+    time_t now = time(nullptr);
+    struct tm* timeinfo = gmtime(&now);
+    
+    fileName += String(1900 + timeinfo->tm_year);
+    if (timeinfo->tm_mon + 1 < 10) {
+      fileName += "0";
+    }
+    fileName += String(timeinfo->tm_mon + 1);
+    if (timeinfo->tm_mday < 10) {
+      fileName += "0";
+    }
+    fileName += String(timeinfo->tm_mday);
+    fileName += "_";
+    if (timeinfo->tm_hour < 10) {
+      fileName += "0";
+    }
+    fileName += String(timeinfo->tm_hour);
+    if (timeinfo->tm_min < 10) {
+      fileName += "0";
+    }
+    fileName += String(timeinfo->tm_min);
+    if (timeinfo->tm_sec < 10) {
+      fileName += "0";
+    }
+    fileName += String(timeinfo->tm_sec);
   }
-  fileName += String(timeinfo->tm_mon + 1);
-  if (timeinfo->tm_mday < 10) {
-    fileName += "0";
-  }
-  fileName += String(timeinfo->tm_mday);
-  fileName += "_";
-  if (timeinfo->tm_hour < 10) {
-    fileName += "0";
-  }
-  fileName += String(timeinfo->tm_hour);
-  if (timeinfo->tm_min < 10) {
-    fileName += "0";
-  }
-  fileName += String(timeinfo->tm_min);
-  if (timeinfo->tm_sec < 10) {
-    fileName += "0";
-  }
-  fileName += String(timeinfo->tm_sec);
+  
   fileName += ".kml";
   
   return String("/HikePod/") + fileName;
@@ -214,35 +245,59 @@ void TrackingManager::writeKMLHeader() {
 void TrackingManager::writeTrackPoint(const Location& location) {
   if (!trackFile) return;
   
-  // 写入时间戳
-  time_t now = time(nullptr);
-  struct tm* timeinfo = gmtime(&now);
-  
-  // 使用更简单的方法生成时间戳，避免strftime的问题
+  // 写入时间戳 - 使用GPS时间
   String timeStr = "";
   
-  // 添加年份
-  timeStr += String(1900 + timeinfo->tm_year) + "-";
-  if (timeinfo->tm_mon + 1 < 10) {
-    timeStr += "0";
+  if (gnssModule && gnssModule->isDateValid() && gnssModule->isTimeValid()) {
+    // 使用GPS时间
+    timeStr += String(gnssModule->getYear()) + "-";
+    if (gnssModule->getMonth() < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(gnssModule->getMonth()) + "-";
+    if (gnssModule->getDay() < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(gnssModule->getDay()) + "T";
+    if (gnssModule->getHour() < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(gnssModule->getHour()) + ":";
+    if (gnssModule->getMinute() < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(gnssModule->getMinute()) + ":";
+    if (gnssModule->getSecond() < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(gnssModule->getSecond()) + "Z";
+  } else {
+    // 如果GPS时间不可用，使用系统时间
+    time_t now = time(nullptr);
+    struct tm* timeinfo = gmtime(&now);
+    
+    timeStr += String(1900 + timeinfo->tm_year) + "-";
+    if (timeinfo->tm_mon + 1 < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(timeinfo->tm_mon + 1) + "-";
+    if (timeinfo->tm_mday < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(timeinfo->tm_mday) + "T";
+    if (timeinfo->tm_hour < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(timeinfo->tm_hour) + ":";
+    if (timeinfo->tm_min < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(timeinfo->tm_min) + ":";
+    if (timeinfo->tm_sec < 10) {
+      timeStr += "0";
+    }
+    timeStr += String(timeinfo->tm_sec) + "Z";
   }
-  timeStr += String(timeinfo->tm_mon + 1) + "-";
-  if (timeinfo->tm_mday < 10) {
-    timeStr += "0";
-  }
-  timeStr += String(timeinfo->tm_mday) + "T";
-  if (timeinfo->tm_hour < 10) {
-    timeStr += "0";
-  }
-  timeStr += String(timeinfo->tm_hour) + ":";
-  if (timeinfo->tm_min < 10) {
-    timeStr += "0";
-  }
-  timeStr += String(timeinfo->tm_min) + ":";
-  if (timeinfo->tm_sec < 10) {
-    timeStr += "0";
-  }
-  timeStr += String(timeinfo->tm_sec) + "Z";
   
   trackFile.print("      <gx:when>");
   trackFile.print(timeStr);
