@@ -24,9 +24,11 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 - **刷入固件**：通过M5Bunner将固件文件刷入M5Stack Cardputer ADV
 - **使用说明**：请参考项目文档中的使用说明
 - **合并固件**：
-   esptool.py --chip esp32s3 merge_bin -o cardputer_factory.bin --flash_mode dio --flash_size 8MB 0x0000 .pio/build/m5stack-cardputer/bootloader.bin 0x8000 .pio/btack-cardputer/partitions.bin 0xe000 ./boot_app0.bin 0x10000 .pio/build/m5stack-cardputer/firmware.bin
+   esptool --chip esp32s3 merge-bin -o cardputer-factory.bin --flash-mode dio --flash-size 8MB 0x0000 .pio/build/m5stack-cardputer/bootloader.bin 0x8000 .pio/build/m5stack-cardputer/partitions.bin 0xe000 ./boot_app0.bin 0x10000 .pio/build/m5stack-cardputer/firmware.bin
+- **刷入固件**：
+   esptool --chip auto --port COM8 --baud 1500000 --before default_reset write_flash -z 0x000 cardputer-factory.bin
 
-
+### 操作说明
 
 #### 基本操作
 
