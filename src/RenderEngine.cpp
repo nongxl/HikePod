@@ -2,6 +2,7 @@
 #include <M5Cardputer.h>
 #include <algorithm>
 #include <cmath>
+#include <esp_system.h>
 
 // 地球半径（米）
 const double EARTH_RADIUS = 6378137.0;
@@ -48,6 +49,45 @@ RenderEngine::RenderEngine() :
   autoPanStartOffsetY(0),  // 初始化为0
   autoPanTargetOffsetX(0),  // 初始化为0
   autoPanTargetOffsetY(0),  // 初始化为0
+  // 3D渲染相关初始化
+  viewMode(MODE_2D),
+  verticalExaggeration(3.0),
+  cameraDistance(500.0),
+  scaleFactor(1.0),
+  userScaleFactor(false),  // 初始化为自动计算
+  pitch(0.0),
+  roll(0.0),
+  hasReferenceOrientation(false),
+  refPitch(0.0),
+  refRoll(0.0),
+  targetPitch(0.0),
+  targetRoll(0.0),
+  viewOffsetX(0.0),
+  viewOffsetY(0.0),
+  targetViewOffsetX(0.0),
+  targetViewOffsetY(0.0),
+  pan3DX(0.0f),
+  pan3DY(0.0f),
+  useCenterRotation(false),
+  worldPoints(nullptr),
+  worldPointCount(0),
+  segments(nullptr),
+  segmentCount(0),
+  cosLat0(1.0f),
+  minWorldX(0.0f),
+  maxWorldX(0.0f),
+  minWorldY(0.0f),
+  maxWorldY(0.0f),
+  routeMinX(0.0),
+  routeMaxX(0.0),
+  routeMinY(0.0),
+  routeMaxY(0.0),
+  groundGridSize(10.0),
+  cachedPointPool(nullptr),
+  cachedPointCount(0),
+  cachedLat0(0.0),
+  cachedLon0(0.0),
+  cachedAlt0(0.0),
   lastBatteryPercentage(-1),
   lastBatteryCheckTime(0),
   trackingState(false),
@@ -160,6 +200,13 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
   // 检查canvas是否已设置
   if (!canvas) return;
   
+  // 根据视图模式选择渲染方法
+  if (viewMode == MODE_3D) {
+    render3D(routePoints, currentLocation, trackPoints, sdInitialized, hasRoute, pointPool, pointCount);
+    return;
+  }
+  
+  // 2D渲染模式
   // 更新统一的缩放参数（确保使用最新的缩放级别）
   updatePixelsPerMeter();
   
@@ -167,6 +214,12 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
   canvas->fillScreen(TFT_WHITE);
   // 确保canvas的颜色模式正确
   canvas->setTextColor(TFT_BLACK);
+  canvas->setTextSize(1);
+  canvas->setTextDatum(MC_DATUM);
+  
+  // 设置屏幕亮度
+  // 注意：这里不设置亮度，因为亮度应该由main.cpp中的全局变量控制
+  // M5Cardputer.Display.setBrightness(255);
   
   // 绘制轨迹
   if (pointPool != nullptr && pointCount > 0) {
@@ -407,66 +460,45 @@ void RenderEngine::drawDebugInfo(const Location& currentLocation, int routePoint
   }
 }
 
-void RenderEngine::latLngToScreen(double lat, double lng, int& x, int& y) {
-  // 使用统一的地图投影模型
-  // 1. 经纬度 -> 相对中心的米数（局部平面近似）
-  double dx, dy;
+void RenderEngine::latLngToScreen(float lat, float lng, int& x, int& y) {
+  float dx, dy;
   latLngToMeters(lat, lng, dx, dy);
-  
-  // 2. 米数 -> 屏幕坐标（使用统一的 pixelsPerMeter）
   metersToScreen(dx, dy, x, y);
 }
 
-void RenderEngine::centerOnLocation(double lat, double lng) {
-  // 更新视图中心点
+void RenderEngine::centerOnLocation(float lat, float lng) {
   viewCenterLat = lat;
   viewCenterLng = lng;
-  
-  // 重置平移偏移，使目标位置位于屏幕中心
   panOffsetX = 0;
   panOffsetY = 0;
 }
 
-void RenderEngine::zoomAroundPoint(double lat, double lng, int newZoomLevel) {
-  // 如果传入的坐标无效，使用屏幕中心作为缩放中心
+void RenderEngine::zoomAroundPoint(float lat, float lng, int newZoomLevel) {
   if (lat == 0 && lng == 0) {
-    // 使用当前视图中心作为缩放中心
     lat = viewCenterLat;
     lng = viewCenterLng;
   }
   
-  // 计算缩放中心点在当前缩放级别下的屏幕坐标
-  double dx, dy;
+  float dx, dy;
   latLngToMeters(lat, lng, dx, dy);
   int oldScreenX, oldScreenY;
   metersToScreen(dx, dy, oldScreenX, oldScreenY);
   
-  // 更新缩放级别
   zoomLevel = constrain(newZoomLevel, 0, 10);
-  
-  // 更新统一的缩放参数
   updatePixelsPerMeter();
   
-  // 计算缩放中心点在新缩放级别下的屏幕坐标
   metersToScreen(dx, dy, oldScreenX, oldScreenY);
   
-  // 调整平移偏移量，使得中心点在屏幕上的位置保持不变
-  // 由于我们使用统一的投影模型，只需要保持视图中心不变
-  // 如果缩放中心不是视图中心，需要调整视图中心
   if (lat != viewCenterLat || lng != viewCenterLng) {
-    // 计算缩放中心相对于视图中心的偏移（米）
-    double centerDx, centerDy;
+    float centerDx, centerDy;
     latLngToMeters(viewCenterLat, viewCenterLng, centerDx, centerDy);
     
-    // 计算缩放中心在屏幕上的位置（应该等于 oldScreenX, oldScreenY）
     int expectedScreenX, expectedScreenY;
     metersToScreen(dx, dy, expectedScreenX, expectedScreenY);
     
-    // 计算需要的平移偏移
     panOffsetX = oldScreenX - expectedScreenX;
     panOffsetY = oldScreenY - expectedScreenY;
   } else {
-    // 缩放中心就是视图中心，重置平移偏移
     panOffsetX = 0;
     panOffsetY = 0;
   }
@@ -498,43 +530,27 @@ double RenderEngine::calculateScaleFactor() {
   return baseScale * zoomFactor;
 }
 
-// 更新统一的缩放参数 pixelsPerMeter
-// 这个方法确保路径绘制和比例尺使用相同的缩放因子
 void RenderEngine::updatePixelsPerMeter() {
-  // 获取当前缩放级别对应的视图宽度（米）
-  int zoomIndex = constrain(zoomLevel, 0, 10);  // zoomLevel 直接对应枚举值（0-10）
-  double viewWidthMeters = ZOOM_VIEW_WIDTHS[zoomIndex];
-  
-  // 计算每米对应的像素数：屏幕宽度 / 视图宽度（米）
+  int zoomIndex = constrain(zoomLevel, 0, 10);
+  float viewWidthMeters = (float)ZOOM_VIEW_WIDTHS[zoomIndex];
   pixelsPerMeter = screenWidth / viewWidthMeters;
 }
 
-// 获取当前的每米像素数
-double RenderEngine::getPixelsPerMeter() {
+float RenderEngine::getPixelsPerMeter() {
   return pixelsPerMeter;
 }
 
-// 经纬度转换为相对中心的米数（局部平面近似）
-// 使用 Equirectangular 投影，以视图中心为参考点
-// dx = (lon - lon0) * cos(lat0) * R
-// dy = (lat - lat0) * R
-void RenderEngine::latLngToMeters(double lat, double lng, double& dx, double& dy) {
-  // 将经纬度转换为弧度
-  double lat0 = viewCenterLat * M_PI / 180.0;
-  double lat1 = lat * M_PI / 180.0;
-  double lng0 = viewCenterLng * M_PI / 180.0;
-  double lng1 = lng * M_PI / 180.0;
+void RenderEngine::latLngToMeters(float lat, float lng, float& dx, float& dy) {
+  float lat0 = viewCenterLat * (float)M_PI / 180.0f;
+  float lat1 = lat * (float)M_PI / 180.0f;
+  float lng0 = viewCenterLng * (float)M_PI / 180.0f;
+  float lng1 = lng * (float)M_PI / 180.0f;
   
-  // 局部平面近似计算相对距离（米）
-  dx = (lng1 - lng0) * cos(lat0) * EARTH_RADIUS;
-  dy = (lat1 - lat0) * EARTH_RADIUS;
+  dx = (lng1 - lng0) * cosf(lat0) * (float)EARTH_RADIUS;
+  dy = (lat1 - lat0) * (float)EARTH_RADIUS;
 }
 
-// 相对中心的米数转换为屏幕坐标
-// px = screenCenterX + dx * pixelsPerMeter + panOffsetX
-// py = screenCenterY - dy * pixelsPerMeter + panOffsetY
-// 注意：Y轴方向反转，因为屏幕坐标Y向下增加，而地理坐标Y（北）向上增加
-void RenderEngine::metersToScreen(double dx, double dy, int& x, int& y) {
+void RenderEngine::metersToScreen(float dx, float dy, int& x, int& y) {
   int screenCenterX = screenWidth / 2;
   int screenCenterY = screenHeight / 2;
   
@@ -594,6 +610,44 @@ void RenderEngine::drawCurrentLocation(const Location& location, const std::vect
         canvas->drawLine(x - crossSize + 1, y, x + crossSize - 1, y, TFT_WHITE);
         canvas->drawLine(x, y - crossSize + 1, x, y + crossSize - 1, TFT_WHITE);
       }
+    } else {
+      // 位置在屏幕外，计算距离最近的屏幕边缘并绘制蓝色三角形
+      int triSize = 10; // 三角形大小
+      int triHeight = 8; // 三角形高度
+      
+      // 计算到各屏幕边缘的距离（使用绝对值）
+      int distLeft = abs(x);
+      int distRight = abs(x - screenWidth);
+      int distTop = abs(y);
+      int distBottom = abs(y - screenHeight);
+      
+      // 找到最小的距离（绝对值）
+      int minDist = std::min({distLeft, distRight, distTop, distBottom});
+      
+      // 绘制蓝色实心钝角等腰三角形
+      canvas->fillTriangle(0, 0, 0, 0, 0, 0, TFT_BLUE); // 占位，下面会覆盖
+      
+      if (minDist == distLeft) {
+        // 左侧边缘，三角形指向右（指向红圈）
+        int triX = 0;
+        int triY = std::max(0, std::min(screenHeight - triSize, y));
+        canvas->fillTriangle(triX, triY, triX, triY + triSize, triX + triHeight, triY + triSize/2, TFT_BLUE);
+      } else if (minDist == distRight) {
+        // 右侧边缘，三角形指向左（指向红圈）
+        int triX = screenWidth - 1;
+        int triY = std::max(0, std::min(screenHeight - triSize, y));
+        canvas->fillTriangle(triX, triY, triX, triY + triSize, triX - triHeight, triY + triSize/2, TFT_BLUE);
+      } else if (minDist == distTop) {
+        // 顶部边缘，三角形指向下（指向红圈）
+        int triX = std::max(0, std::min(screenWidth - triSize, x));
+        int triY = 0;
+        canvas->fillTriangle(triX, triY, triX + triSize, triY, triX + triSize/2, triY + triHeight, TFT_BLUE);
+      } else if (minDist == distBottom) {
+        // 底部边缘，三角形指向上（指向红圈）
+        int triX = std::max(0, std::min(screenWidth - triSize, x));
+        int triY = screenHeight - 1;
+        canvas->fillTriangle(triX, triY, triX + triSize, triY, triX + triSize/2, triY - triHeight, TFT_BLUE);
+      }
     }
   } else {
     // 如果没有有效的GPS位置，使用KML路径上的startpoint作为默认位置
@@ -605,6 +659,42 @@ void RenderEngine::drawCurrentLocation(const Location& location, const std::vect
       if (x >= -10 && x < screenWidth + 10 && y >= -10 && y < screenHeight + 10) {
         canvas->fillCircle(x, y, 5, TFT_RED);
         canvas->fillCircle(x, y, 2, TFT_WHITE);
+      } else {
+        // 位置在屏幕外，计算距离最近的屏幕边缘并绘制蓝色三角形
+        int triSize = 10; // 三角形大小
+        int triHeight = 8; // 三角形高度
+        
+        // 计算到各屏幕边缘的距离（使用绝对值）
+        int distLeft = abs(x);
+        int distRight = abs(x - screenWidth);
+        int distTop = abs(y);
+        int distBottom = abs(y - screenHeight);
+        
+        // 找到最小的距离（绝对值）
+        int minDist = std::min({distLeft, distRight, distTop, distBottom});
+        
+        // 绘制蓝色实心钝角等腰三角形
+        if (minDist == distLeft) {
+          // 左侧边缘
+          int triX = 0;
+          int triY = std::max(0, std::min(screenHeight - triSize, y));
+          canvas->fillTriangle(triX, triY, triX, triY + triSize, triX + triHeight, triY + triSize/2, TFT_BLUE);
+        } else if (minDist == distRight) {
+          // 右侧边缘
+          int triX = screenWidth - 1;
+          int triY = std::max(0, std::min(screenHeight - triSize, y));
+          canvas->fillTriangle(triX, triY, triX, triY + triSize, triX - triHeight, triY + triSize/2, TFT_BLUE);
+        } else if (minDist == distTop) {
+          // 顶部边缘
+          int triX = std::max(0, std::min(screenWidth - triSize, x));
+          int triY = 0;
+          canvas->fillTriangle(triX, triY, triX + triSize, triY, triX + triSize/2, triY + triHeight, TFT_BLUE);
+        } else if (minDist == distBottom) {
+          // 底部边缘
+          int triX = std::max(0, std::min(screenWidth - triSize, x));
+          int triY = screenHeight - 1;
+          canvas->fillTriangle(triX, triY, triX + triSize, triY, triX + triSize/2, triY - triHeight, TFT_BLUE);
+        }
       }
     } else if (!routePoints.empty()) {
       // 如果没有有效的起点坐标，但有路线数据，则使用路线的第一个点
@@ -615,6 +705,42 @@ void RenderEngine::drawCurrentLocation(const Location& location, const std::vect
       if (x >= -10 && x < screenWidth + 10 && y >= -10 && y < screenHeight + 10) {
         canvas->fillCircle(x, y, 5, TFT_RED);
         canvas->fillCircle(x, y, 2, TFT_WHITE);
+      } else {
+        // 位置在屏幕外，计算距离最近的屏幕边缘并绘制蓝色三角形
+        int triSize = 10; // 三角形大小
+        int triHeight = 4; // 三角形高度
+        
+        // 计算到各屏幕边缘的距离（使用绝对值）
+        int distLeft = abs(x);
+        int distRight = abs(x - screenWidth);
+        int distTop = abs(y);
+        int distBottom = abs(y - screenHeight);
+        
+        // 找到最小的距离（绝对值）
+        int minDist = std::min({distLeft, distRight, distTop, distBottom});
+        
+        // 绘制蓝色实心钝角等腰三角形
+        if (minDist == distLeft) {
+          // 左侧边缘
+          int triX = 0;
+          int triY = std::max(0, std::min(screenHeight - triSize, y));
+          canvas->fillTriangle(triX, triY, triX, triY + triSize, triX + triHeight, triY + triSize/2, TFT_BLUE);
+        } else if (minDist == distRight) {
+          // 右侧边缘
+          int triX = screenWidth - 1;
+          int triY = std::max(0, std::min(screenHeight - triSize, y));
+          canvas->fillTriangle(triX, triY, triX, triY + triSize, triX - triHeight, triY + triSize/2, TFT_BLUE);
+        } else if (minDist == distTop) {
+          // 顶部边缘
+          int triX = std::max(0, std::min(screenWidth - triSize, x));
+          int triY = 0;
+          canvas->fillTriangle(triX, triY, triX + triSize, triY, triX + triSize/2, triY + triHeight, TFT_BLUE);
+        } else if (minDist == distBottom) {
+          // 底部边缘
+          int triX = std::max(0, std::min(screenWidth - triSize, x));
+          int triY = screenHeight - 1;
+          canvas->fillTriangle(triX, triY, triX + triSize, triY, triX + triSize/2, triY - triHeight, TFT_BLUE);
+        }
       }
     } else {
       // 如果既没有有效的起点坐标，也没有路线数据，则在屏幕中心显示
@@ -747,6 +873,82 @@ void RenderEngine::drawScaleBar() {
   }
 }
 
+void RenderEngine::draw3DScaleBar() {
+  // 绘制位置（右下角）
+  const int MARGIN = 5;
+  const int SCALE_LENGTH = 35;
+  int centerX = screenWidth - MARGIN - 5;
+  int centerY = screenHeight - MARGIN - 10;
+  
+  canvas->setTextColor(TFT_BLACK);
+  canvas->setTextSize(1);
+  
+  // 计算水平比例尺（地面网格）
+  double metersPerPixel = 1000.0 / scaleFactor;
+  
+  // 规范化比例尺距离
+  double niceScales[] = {1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000};
+  int niceScaleCount = 13;
+  
+  double targetMeters = SCALE_LENGTH * metersPerPixel;
+  double bestScale = niceScales[0];
+  double minDiff = abs(targetMeters - niceScales[0]);
+  
+  for (int i = 1; i < niceScaleCount; i++) {
+    double diff = abs(targetMeters - niceScales[i]);
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestScale = niceScales[i];
+    }
+  }
+  
+  double hScaleMeters = bestScale;
+  double hScalePixels = hScaleMeters / metersPerPixel;
+  
+  // 绘制水平比例尺（向左延伸）
+  canvas->drawLine(centerX, centerY, centerX - (int)hScalePixels, centerY, TFT_BLACK);
+  canvas->drawLine(centerX, centerY - 3, centerX, centerY + 3, TFT_BLACK);
+  canvas->drawLine(centerX - (int)hScalePixels, centerY - 3, centerX - (int)hScalePixels, centerY + 3, TFT_BLACK);
+  
+  // 水平比例尺文本（显示在比例尺下方）
+  int hTextX = centerX - (int)(hScalePixels / 2) - 10;
+  canvas->setCursor(hTextX, centerY + 5);
+  if (hScaleMeters >= 1000) {
+    canvas->printf("%.0fkm", hScaleMeters / 1000.0);
+  } else {
+    canvas->printf("%.0fm", hScaleMeters);
+  }
+  
+  // 绘制垂直比例尺（向上延伸）
+  double vScaleMeters = 100.0;
+  double vScalePixels = vScaleMeters * 0.001 * verticalExaggeration * scaleFactor;
+  
+  while (vScalePixels > SCALE_LENGTH * 1.5 && vScaleMeters > 10) {
+    vScaleMeters /= 2;
+    vScalePixels = vScaleMeters * 0.001 * verticalExaggeration * scaleFactor;
+  }
+  while (vScalePixels < SCALE_LENGTH * 0.5 && vScaleMeters < 10000) {
+    vScaleMeters *= 2;
+    vScalePixels = vScaleMeters * 0.001 * verticalExaggeration * scaleFactor;
+  }
+  
+  if (vScalePixels > SCALE_LENGTH * 2) {
+    vScalePixels = SCALE_LENGTH * 2;
+  }
+  
+  canvas->drawLine(centerX, centerY, centerX, centerY - (int)vScalePixels, TFT_BLACK);
+  canvas->drawLine(centerX - 3, centerY, centerX + 3, centerY, TFT_BLACK);
+  canvas->drawLine(centerX - 3, centerY - (int)vScalePixels, centerX + 3, centerY - (int)vScalePixels, TFT_BLACK);
+  
+  // 垂直比例尺文本（显示在比例尺左侧，避免超出右边界）
+  canvas->setCursor(centerX - 30, centerY - (int)(vScalePixels / 2) - 3);
+  canvas->printf("%.0fm", vScaleMeters);
+  
+  // 显示垂直放大系数（显示在顶部文本左侧）
+  canvas->setCursor(centerX - 20, centerY - (int)vScalePixels - 10);
+  canvas->printf("x%.1f", verticalExaggeration);
+}
+
 void RenderEngine::drawBatteryInfo() {
   // 设置文本颜色为黑色
   canvas->setTextColor(TFT_BLACK);
@@ -809,6 +1011,702 @@ void RenderEngine::setLocationLocked(bool locked) {
 
 bool RenderEngine::isLocationLockedState() const {
   return isLocationLocked;
+}
+
+// 3D渲染相关方法实现
+void RenderEngine::setViewMode(ViewMode mode) {
+  if (viewMode == mode) return;
+  
+  if (mode == MODE_2D) {
+    releaseWorldPoints();
+  } else {
+    hasReferenceOrientation = false;
+    pitch = 0.0;
+    roll = 0.0;
+    targetPitch = 0.0;
+    targetRoll = 0.0;
+    viewOffsetX = 0.0;
+    viewOffsetY = 0.0;
+    targetViewOffsetX = 0.0;
+    targetViewOffsetY = 0.0;
+  }
+  viewMode = mode;
+}
+
+void RenderEngine::setVerticalExaggeration(float value) {
+  float newValue = constrain(value, 1.0f, 8.0f);
+  if (newValue != verticalExaggeration) {
+    verticalExaggeration = newValue;
+    invalidateWorldPoints();
+  }
+}
+
+void RenderEngine::setCameraDistance(float distance) {
+  cameraDistance = distance;
+}
+
+void RenderEngine::setScaleFactor(float scale) {
+  scaleFactor = scale;
+}
+
+void RenderEngine::setOrientation(float pitchAngle, float rollAngle) {
+  pitch = pitchAngle;
+  roll = rollAngle;
+}
+
+void RenderEngine::setReferenceOrientation(float pitchAngle, float rollAngle) {
+  refPitch = pitchAngle;
+  refRoll = rollAngle;
+  hasReferenceOrientation = true;
+  Serial.printf("[3D Camera] Reference orientation set: Pitch=%.1f°, Roll=%.1f°\n",
+                refPitch * 180.0f / (float)M_PI, refRoll * 180.0f / (float)M_PI);
+}
+
+void RenderEngine::updateCameraOrientation(float currentPitch, float currentRoll, float accelX, float accelY) {
+  if (!hasReferenceOrientation) {
+    setReferenceOrientation(currentPitch, currentRoll);
+    return;
+  }
+  
+  float deltaPitch = currentPitch - refPitch;
+  float deltaRoll = currentRoll - refRoll;
+  
+  const float MAX_ANGLE = 60.0f * (float)M_PI / 180.0f;
+  deltaPitch = constrain(deltaPitch, -MAX_ANGLE, MAX_ANGLE);
+  deltaRoll = constrain(deltaRoll, -MAX_ANGLE, MAX_ANGLE);
+  
+  deltaRoll = -deltaRoll;
+  
+  targetPitch = deltaPitch;
+  targetRoll = deltaRoll;
+  
+  const float SMOOTH_FACTOR = 0.15f;
+  pitch += (targetPitch - pitch) * SMOOTH_FACTOR;
+  roll += (targetRoll - roll) * SMOOTH_FACTOR;
+  
+  const float VIEW_SHIFT_SCALE = 15.0f;
+  targetViewOffsetX = -accelY * VIEW_SHIFT_SCALE;
+  targetViewOffsetY = accelX * VIEW_SHIFT_SCALE;
+  
+  const float OFFSET_SMOOTH_FACTOR = 0.1f;
+  viewOffsetX += (targetViewOffsetX - viewOffsetX) * OFFSET_SMOOTH_FACTOR;
+  viewOffsetY += (targetViewOffsetY - viewOffsetY) * OFFSET_SMOOTH_FACTOR;
+}
+
+void RenderEngine::increaseVerticalExaggeration() {
+  setVerticalExaggeration(verticalExaggeration + 0.5f);
+}
+
+void RenderEngine::decreaseVerticalExaggeration() {
+  setVerticalExaggeration(verticalExaggeration - 0.5f);
+}
+
+void RenderEngine::zoom3D(float factor) {
+  scaleFactor *= factor;
+  if (scaleFactor < 10.0f) scaleFactor = 10.0f;
+  if (scaleFactor > 5000.0f) scaleFactor = 5000.0f;
+  userScaleFactor = true;
+  Serial.printf("[3D Zoom] ScaleFactor: %.4f\n", scaleFactor);
+}
+
+void RenderEngine::pan3D(int dx, int dy) {
+  pan3DX += dx;
+  pan3DY += dy;
+}
+
+void RenderEngine::toggleRotationCenter() {
+  useCenterRotation = !useCenterRotation;
+  Serial.printf("[3D] Rotation center: %s\n", useCenterRotation ? "Grid center" : "Start point");
+}
+
+void RenderEngine::reset3DView() {
+  pan3DX = 0.0f;
+  pan3DY = 0.0f;
+  scaleFactor = 1.0f;
+  userScaleFactor = false;
+  Serial.println("[3D] View reset");
+}
+
+void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
+  releaseWorldPoints();
+  
+  if (!pointPool || pointCount == 0) return;
+  
+  int samplingStep = 1;
+  int targetCount = pointCount;
+  if (pointCount > 4000) {
+    samplingStep = pointCount / 4000 + 1;
+    targetCount = (pointCount + samplingStep - 1) / samplingStep;
+  }
+  
+  worldPoints = new WorldPoint[targetCount];
+  segments = new SegmentRef[targetCount - 1];
+  
+  if (!worldPoints || !segments) {
+    Serial.println("[3D] Memory allocation failed!");
+    releaseWorldPoints();
+    return;
+  }
+  
+  cachedLat0 = pointPool[0].latitude;
+  cachedLon0 = pointPool[0].longitude;
+  cachedAlt0 = pointPool[0].altitude;
+  cosLat0 = cosf((float)cachedLat0 * PI / 180.0f);
+  
+  const float EARTH_RADIUS_KM = 6378.137f;
+  const float DEG2RAD = PI / 180.0f;
+  
+  worldPointCount = 0;
+  minWorldX = 1e9f; maxWorldX = -1e9f;
+  minWorldY = 1e9f; maxWorldY = -1e9f;
+  
+  for (int i = 0; i < pointCount && worldPointCount < targetCount; i += samplingStep) {
+    float dLon = (pointPool[i].longitude - cachedLon0) * DEG2RAD;
+    float dLat = (pointPool[i].latitude - cachedLat0) * DEG2RAD;
+    
+    float wx = dLon * cosLat0 * EARTH_RADIUS_KM;
+    float wy = -dLat * EARTH_RADIUS_KM;
+    float wz = (pointPool[i].altitude - cachedAlt0) * 0.001f * (float)verticalExaggeration;
+    
+    worldPoints[worldPointCount].x = wx;
+    worldPoints[worldPointCount].y = wy;
+    worldPoints[worldPointCount].z = wz;
+    
+    if (wx < minWorldX) minWorldX = wx;
+    if (wx > maxWorldX) maxWorldX = wx;
+    if (wy < minWorldY) minWorldY = wy;
+    if (wy > maxWorldY) maxWorldY = wy;
+    
+    worldPointCount++;
+  }
+  
+  segmentCount = worldPointCount - 1;
+  for (int i = 0; i < segmentCount; i++) {
+    segments[i].i1 = i;
+    segments[i].i2 = i + 1;
+    segments[i].depth = 0;
+  }
+  
+  cachedPointPool = pointPool;
+  cachedPointCount = pointCount;
+  
+  if (!userScaleFactor) {
+    float worldWidth = maxWorldX - minWorldX;
+    float worldHeight = maxWorldY - minWorldY;
+    float maxExtent = max(worldWidth, worldHeight);
+    
+    if (maxExtent > 0.001f) {
+      float screenExtent = min(screenWidth, screenHeight) * 0.7f;
+      scaleFactor = screenExtent / maxExtent;
+      
+      if (scaleFactor < 10.0f) scaleFactor = 10.0f;
+      if (scaleFactor > 5000.0f) scaleFactor = 5000.0f;
+      
+      Serial.printf("[3D World] Auto scale: %.2f (extent: %.3f km)\n", scaleFactor, maxExtent);
+    }
+  }
+  
+  Serial.printf("[3D World] Built %d points from %d original (step=%d)\n", 
+                worldPointCount, pointCount, samplingStep);
+  Serial.printf("[3D World] X: %.3f to %.3f km, Y: %.3f to %.3f km\n",
+                minWorldX, maxWorldX, minWorldY, maxWorldY);
+}
+
+void RenderEngine::releaseWorldPoints() {
+  if (worldPoints) {
+    delete[] worldPoints;
+    worldPoints = nullptr;
+  }
+  if (segments) {
+    delete[] segments;
+    segments = nullptr;
+  }
+  worldPointCount = 0;
+  segmentCount = 0;
+}
+
+void RenderEngine::invalidateWorldPoints() {
+  releaseWorldPoints();
+  userScaleFactor = false;  // 重置用户缩放标志，允许自动计算缩放因子
+}
+
+// 3D渲染核心方法实现
+void RenderEngine::render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount) {
+  if (!canvas) return;
+  
+  if (worldPointCount == 0 || worldPoints == nullptr) {
+    if (pointPool && pointCount > 0) {
+      buildWorldPoints(pointPool, pointCount);
+    } else if (!routePoints.empty()) {
+      buildWorldPoints(routePoints.data(), routePoints.size());
+    }
+  }
+  
+  if (worldPointCount == 0) {
+    canvas->fillScreen(TFT_WHITE);
+    canvas->setTextColor(TFT_BLACK);
+    canvas->setCursor(10, 10);
+    canvas->println("No route data");
+    canvas->setCursor(10, 25);
+    canvas->println("Please load a KML file");
+    return;
+  }
+  
+  canvas->fillScreen(TFT_WHITE);
+  canvas->setTextColor(TFT_BLACK);
+  canvas->setTextSize(1);
+  
+  float cosP = cosf((float)pitch);
+  float sinP = sinf((float)pitch);
+  float cosR = cosf((float)roll);
+  float sinR = sinf((float)roll);
+  
+  float alpha = 19.47f * PI / 180.0f;
+  float gamma = 20.7f * PI / 180.0f;
+  float sinA = sinf(alpha);
+  float cosA = cosf(alpha);
+  float sinG = sinf(gamma);
+  float cosG = cosf(gamma);
+  
+  float centerX = 0.0f, centerY = 0.0f;
+  if (useCenterRotation) {
+    centerX = (minWorldX + maxWorldX) / 2.0f;
+    centerY = (minWorldY + maxWorldY) / 2.0f;
+  }
+  
+  float minZ = 1e9f, maxZ = -1e9f;
+  for (int i = 0; i < worldPointCount; i++) {
+    float wx = worldPoints[i].x - centerX;
+    float wy = worldPoints[i].y - centerY;
+    float wz = worldPoints[i].z;
+    
+    float rx = wx * cosR + wz * sinR;
+    float rz = -wx * sinR + wz * cosR;
+    float ry = wy * cosP - rz * sinP;
+    rz = wy * sinP + rz * cosP;
+    
+    if (rz < minZ) minZ = rz;
+    if (rz > maxZ) maxZ = rz;
+  }
+  float zRange = maxZ - minZ;
+  if (zRange < 0.001f) zRange = 1.0f;
+  
+  for (int i = 0; i < segmentCount; i++) {
+    int i1 = segments[i].i1;
+    int i2 = segments[i].i2;
+    
+    float wx1 = worldPoints[i1].x - centerX;
+    float wy1 = worldPoints[i1].y - centerY;
+    float wz1 = worldPoints[i1].z;
+    float wx2 = worldPoints[i2].x - centerX;
+    float wy2 = worldPoints[i2].y - centerY;
+    float wz2 = worldPoints[i2].z;
+    
+    float rx1 = wx1 * cosR + wz1 * sinR;
+    float rz1 = -wx1 * sinR + wz1 * cosR;
+    float ry1 = wy1 * cosP - rz1 * sinP;
+    rz1 = wy1 * sinP + rz1 * cosP;
+    
+    float rx2 = wx2 * cosR + wz2 * sinR;
+    float rz2 = -wx2 * sinR + wz2 * cosR;
+    float ry2 = wy2 * cosP - rz2 * sinP;
+    rz2 = wy2 * sinP + rz2 * cosP;
+    
+    segments[i].depth = (rz1 + rz2) / 2.0f;
+  }
+  
+  for (int i = 0; i < segmentCount - 1; i++) {
+    for (int j = i + 1; j < segmentCount; j++) {
+      if (segments[j].depth > segments[i].depth) {
+        SegmentRef temp = segments[i];
+        segments[i] = segments[j];
+        segments[j] = temp;
+      }
+    }
+  }
+  
+  for (int i = 0; i < segmentCount; i++) {
+    int i1 = segments[i].i1;
+    int i2 = segments[i].i2;
+    
+    float wx1 = worldPoints[i1].x - centerX;
+    float wy1 = worldPoints[i1].y - centerY;
+    float wz1 = worldPoints[i1].z;
+    float wx2 = worldPoints[i2].x - centerX;
+    float wy2 = worldPoints[i2].y - centerY;
+    float wz2 = worldPoints[i2].z;
+    
+    float rx1 = wx1 * cosR + wz1 * sinR;
+    float rz1 = -wx1 * sinR + wz1 * cosR;
+    float ry1 = wy1 * cosP - rz1 * sinP;
+    rz1 = wy1 * sinP + rz1 * cosP;
+    
+    float rx2 = wx2 * cosR + wz2 * sinR;
+    float rz2 = -wx2 * sinR + wz2 * cosR;
+    float ry2 = wy2 * cosP - rz2 * sinP;
+    rz2 = wy2 * sinP + rz2 * cosP;
+    
+    float sx1 = rx1 * (float)scaleFactor;
+    float sy1 = ry1 * (float)scaleFactor;
+    float sz1 = rz1 * (float)scaleFactor;
+    float sx2 = rx2 * (float)scaleFactor;
+    float sy2 = ry2 * (float)scaleFactor;
+    float sz2 = rz2 * (float)scaleFactor;
+    
+    float x2d1 = (sx1 * cosG) - (sy1 * sinG);
+    float y2d1 = -(sx1 * sinG * sinA) - (sy1 * cosG * sinA) + (sz1 * cosA);
+    float x2d2 = (sx2 * cosG) - (sy2 * sinG);
+    float y2d2 = -(sx2 * sinG * sinA) - (sy2 * cosG * sinA) + (sz2 * cosA);
+    
+    int screenX1 = (int)(x2d1 + screenWidth / 2 + pan3DX);
+    int screenY1 = (int)(screenHeight / 2 - y2d1 + pan3DY);
+    int screenX2 = (int)(x2d2 + screenWidth / 2 + pan3DX);
+    int screenY2 = (int)(screenHeight / 2 - y2d2 + pan3DY);
+    
+    if (screenX1 < -50 || screenX1 > screenWidth + 50 ||
+        screenY1 < -50 || screenY1 > screenHeight + 50 ||
+        screenX2 < -50 || screenX2 > screenWidth + 50 ||
+        screenY2 < -50 || screenY2 > screenHeight + 50) {
+      continue;
+    }
+    
+    float depthNorm = (segments[i].depth - minZ) / zRange;
+    if (depthNorm < 0.0f) depthNorm = 0.0f;
+    if (depthNorm > 1.0f) depthNorm = 1.0f;
+    
+    float brightness = 1.0f - depthNorm * 0.7f;
+    
+    uint8_t r = (uint8_t)(0 * brightness);
+    uint8_t g = (uint8_t)(0 * brightness);
+    uint8_t b = (uint8_t)(255 * brightness);
+    
+    float fogFactor = depthNorm * 0.4f;
+    r = (uint8_t)(r * (1.0f - fogFactor) + 255 * fogFactor);
+    g = (uint8_t)(g * (1.0f - fogFactor) + 255 * fogFactor);
+    b = (uint8_t)(b * (1.0f - fogFactor) + 255 * fogFactor);
+    
+    uint16_t color = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+    
+    canvas->drawLine(screenX1, screenY1, screenX2, screenY2, color);
+  }
+  
+  if (worldPointCount > 0) {
+    float wx = worldPoints[0].x - centerX;
+    float wy = worldPoints[0].y - centerY;
+    float wz = worldPoints[0].z;
+    
+    float rx = wx * cosR + wz * sinR;
+    float rz = -wx * sinR + wz * cosR;
+    float ry = wy * cosP - rz * sinP;
+    rz = wy * sinP + rz * cosP;
+    
+    float sx = rx * (float)scaleFactor;
+    float sy = ry * (float)scaleFactor;
+    float sz = rz * (float)scaleFactor;
+    
+    float x2d = (sx * cosG) - (sy * sinG);
+    float y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
+    
+    int screenX = (int)(x2d + screenWidth / 2 + pan3DX);
+    int screenY = (int)(screenHeight / 2 - y2d + pan3DY);
+    
+    canvas->fillCircle(screenX, screenY, 3, TFT_GREEN);
+    
+    wx = worldPoints[worldPointCount - 1].x - centerX;
+    wy = worldPoints[worldPointCount - 1].y - centerY;
+    wz = worldPoints[worldPointCount - 1].z;
+    
+    rx = wx * cosR + wz * sinR;
+    rz = -wx * sinR + wz * cosR;
+    ry = wy * cosP - rz * sinP;
+    rz = wy * sinP + rz * cosP;
+    
+    sx = rx * (float)scaleFactor;
+    sy = ry * (float)scaleFactor;
+    sz = rz * (float)scaleFactor;
+    
+    x2d = (sx * cosG) - (sy * sinG);
+    y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
+    
+    screenX = (int)(x2d + screenWidth / 2 + pan3DX);
+    screenY = (int)(screenHeight / 2 - y2d + pan3DY);
+    
+    canvas->fillCircle(screenX, screenY, 3, TFT_RED);
+  }
+  
+  draw3DGroundPlane(cosP, sinP, cosR, sinR, sinA, cosA, sinG, cosG);
+  
+  draw3DGroundProjection(cosP, sinP, cosR, sinR, sinA, cosA, sinG, cosG, minZ, zRange, centerX, centerY);
+  
+  draw3DVerticalLines(cosP, sinP, cosR, sinR, sinA, cosA, sinG, cosG, minZ, zRange, centerX, centerY);
+  
+  draw3DUIInfo();
+}
+
+// 绘制3D地面网格
+void RenderEngine::draw3DGroundPlane(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG) {
+  if (!canvas || worldPointCount == 0) return;
+  
+  float gridExtent = max(maxWorldX - minWorldX, maxWorldY - minWorldY) * 0.6f;
+  if (gridExtent < 0.5f) gridExtent = 0.5f;
+  
+  float gridCenterX = (minWorldX + maxWorldX) / 2.0f;
+  float gridCenterY = (minWorldY + maxWorldY) / 2.0f;
+  
+  float rotCenterX = useCenterRotation ? gridCenterX : 0.0f;
+  float rotCenterY = useCenterRotation ? gridCenterY : 0.0f;
+  
+  int gridLines = 15;
+  float gridStep = gridExtent * 2.0f / (gridLines - 1);
+  
+  for (int i = 0; i < gridLines; i++) {
+    float x = gridCenterX - gridExtent + i * gridStep;
+    
+    float wx1 = x - rotCenterX, wy1 = gridCenterY - gridExtent - rotCenterY, wz1 = 0;
+    float wx2 = x - rotCenterX, wy2 = gridCenterY + gridExtent - rotCenterY, wz2 = 0;
+    
+    float rx1 = wx1 * cosR + wz1 * sinR;
+    float rz1 = -wx1 * sinR + wz1 * cosR;
+    float ry1 = wy1 * cosP - rz1 * sinP;
+    rz1 = wy1 * sinP + rz1 * cosP;
+    
+    float rx2 = wx2 * cosR + wz2 * sinR;
+    float rz2 = -wx2 * sinR + wz2 * cosR;
+    float ry2 = wy2 * cosP - rz2 * sinP;
+    rz2 = wy2 * sinP + rz2 * cosP;
+    
+    float sx1 = rx1 * (float)scaleFactor;
+    float sy1 = ry1 * (float)scaleFactor;
+    float sz1 = rz1 * (float)scaleFactor;
+    float sx2 = rx2 * (float)scaleFactor;
+    float sy2 = ry2 * (float)scaleFactor;
+    float sz2 = rz2 * (float)scaleFactor;
+    
+    float x2d1 = (sx1 * cosG) - (sy1 * sinG);
+    float y2d1 = -(sx1 * sinG * sinA) - (sy1 * cosG * sinA) + (sz1 * cosA);
+    float x2d2 = (sx2 * cosG) - (sy2 * sinG);
+    float y2d2 = -(sx2 * sinG * sinA) - (sy2 * cosG * sinA) + (sz2 * cosA);
+    
+    int screenX1 = (int)(x2d1 + screenWidth / 2 + pan3DX);
+    int screenY1 = (int)(screenHeight / 2 - y2d1 + pan3DY);
+    int screenX2 = (int)(x2d2 + screenWidth / 2 + pan3DX);
+    int screenY2 = (int)(screenHeight / 2 - y2d2 + pan3DY);
+    
+    int margin = max(screenWidth, screenHeight);
+    bool xOutside = (screenX1 < -margin && screenX2 < -margin) || (screenX1 > screenWidth + margin && screenX2 > screenWidth + margin);
+    bool yOutside = (screenY1 < -margin && screenY2 < -margin) || (screenY1 > screenHeight + margin && screenY2 > screenHeight + margin);
+    if (!xOutside && !yOutside) {
+      canvas->drawLine(screenX1, screenY1, screenX2, screenY2, TFT_LIGHTGRAY);
+    }
+  }
+  
+  for (int i = 0; i < gridLines; i++) {
+    float y = gridCenterY - gridExtent + i * gridStep;
+    
+    float wx1 = gridCenterX - gridExtent - rotCenterX, wy1 = y - rotCenterY, wz1 = 0;
+    float wx2 = gridCenterX + gridExtent - rotCenterX, wy2 = y - rotCenterY, wz2 = 0;
+    
+    float rx1 = wx1 * cosR + wz1 * sinR;
+    float rz1 = -wx1 * sinR + wz1 * cosR;
+    float ry1 = wy1 * cosP - rz1 * sinP;
+    rz1 = wy1 * sinP + rz1 * cosP;
+    
+    float rx2 = wx2 * cosR + wz2 * sinR;
+    float rz2 = -wx2 * sinR + wz2 * cosR;
+    float ry2 = wy2 * cosP - rz2 * sinP;
+    rz2 = wy2 * sinP + rz2 * cosP;
+    
+    float sx1 = rx1 * (float)scaleFactor;
+    float sy1 = ry1 * (float)scaleFactor;
+    float sz1 = rz1 * (float)scaleFactor;
+    float sx2 = rx2 * (float)scaleFactor;
+    float sy2 = ry2 * (float)scaleFactor;
+    float sz2 = rz2 * (float)scaleFactor;
+    
+    float x2d1 = (sx1 * cosG) - (sy1 * sinG);
+    float y2d1 = -(sx1 * sinG * sinA) - (sy1 * cosG * sinA) + (sz1 * cosA);
+    float x2d2 = (sx2 * cosG) - (sy2 * sinG);
+    float y2d2 = -(sx2 * sinG * sinA) - (sy2 * cosG * sinA) + (sz2 * cosA);
+    
+    int screenX1 = (int)(x2d1 + screenWidth / 2 + pan3DX);
+    int screenY1 = (int)(screenHeight / 2 - y2d1 + pan3DY);
+    int screenX2 = (int)(x2d2 + screenWidth / 2 + pan3DX);
+    int screenY2 = (int)(screenHeight / 2 - y2d2 + pan3DY);
+    
+    int margin = max(screenWidth, screenHeight);
+    bool xOutside = (screenX1 < -margin && screenX2 < -margin) || (screenX1 > screenWidth + margin && screenX2 > screenWidth + margin);
+    bool yOutside = (screenY1 < -margin && screenY2 < -margin) || (screenY1 > screenHeight + margin && screenY2 > screenHeight + margin);
+    if (!xOutside && !yOutside) {
+      canvas->drawLine(screenX1, screenY1, screenX2, screenY2, TFT_LIGHTGRAY);
+    }
+  }
+}
+
+void RenderEngine::draw3DGroundProjection(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG, float minZ, float zRange, float centerX, float centerY) {
+  if (!canvas || worldPointCount < 2) return;
+  
+  for (int i = 0; i < segmentCount; i++) {
+    int i1 = segments[i].i1;
+    int i2 = segments[i].i2;
+    
+    float wx1 = worldPoints[i1].x - centerX;
+    float wy1 = worldPoints[i1].y - centerY;
+    float wx2 = worldPoints[i2].x - centerX;
+    float wy2 = worldPoints[i2].y - centerY;
+    
+    float rx1 = wx1 * cosR;
+    float rz1 = -wx1 * sinR;
+    float ry1 = wy1 * cosP - rz1 * sinP;
+    rz1 = wy1 * sinP + rz1 * cosP;
+    
+    float rx2 = wx2 * cosR;
+    float rz2 = -wx2 * sinR;
+    float ry2 = wy2 * cosP - rz2 * sinP;
+    rz2 = wy2 * sinP + rz2 * cosP;
+    
+    float sx1 = rx1 * (float)scaleFactor;
+    float sy1 = ry1 * (float)scaleFactor;
+    float sz1 = rz1 * (float)scaleFactor;
+    float sx2 = rx2 * (float)scaleFactor;
+    float sy2 = ry2 * (float)scaleFactor;
+    float sz2 = rz2 * (float)scaleFactor;
+    
+    float x2d1 = (sx1 * cosG) - (sy1 * sinG);
+    float y2d1 = -(sx1 * sinG * sinA) - (sy1 * cosG * sinA) + (sz1 * cosA);
+    float x2d2 = (sx2 * cosG) - (sy2 * sinG);
+    float y2d2 = -(sx2 * sinG * sinA) - (sy2 * cosG * sinA) + (sz2 * cosA);
+    
+    int screenX1 = (int)(x2d1 + screenWidth / 2 + pan3DX);
+    int screenY1 = (int)(screenHeight / 2 - y2d1 + pan3DY);
+    int screenX2 = (int)(x2d2 + screenWidth / 2 + pan3DX);
+    int screenY2 = (int)(screenHeight / 2 - y2d2 + pan3DY);
+    
+    if (screenX1 < -50 || screenX1 > screenWidth + 50 ||
+        screenY1 < -50 || screenY1 > screenHeight + 50 ||
+        screenX2 < -50 || screenX2 > screenWidth + 50 ||
+        screenY2 < -50 || screenY2 > screenHeight + 50) {
+      continue;
+    }
+    
+    float depthNorm = (segments[i].depth - minZ) / zRange;
+    if (depthNorm < 0.0f) depthNorm = 0.0f;
+    if (depthNorm > 1.0f) depthNorm = 1.0f;
+    
+    uint8_t intensity = (uint8_t)(180 + 50 * (1.0f - depthNorm));
+    uint16_t color = ((intensity >> 3) << 11) | ((intensity >> 2) << 5) | (intensity >> 3);
+    
+    canvas->drawLine(screenX1, screenY1, screenX2, screenY2, color);
+  }
+}
+
+void RenderEngine::draw3DVerticalLines(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG, float minZ, float zRange, float centerX, float centerY) {
+  if (!canvas || worldPointCount == 0) return;
+  
+  int step = max(1, worldPointCount / 50);
+  
+  for (int i = 0; i < worldPointCount; i += step) {
+    float wx = worldPoints[i].x - centerX;
+    float wy = worldPoints[i].y - centerY;
+    float wz = worldPoints[i].z;
+    
+    if (wz < 0.01f) continue;
+    
+    float rx = wx * cosR + wz * sinR;
+    float rz = -wx * sinR + wz * cosR;
+    float ry = wy * cosP - rz * sinP;
+    rz = wy * sinP + rz * cosP;
+    
+    float sx = rx * (float)scaleFactor;
+    float sy = ry * (float)scaleFactor;
+    float sz = rz * (float)scaleFactor;
+    
+    float x2d = (sx * cosG) - (sy * sinG);
+    float y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
+    
+    int screenX = (int)(x2d + screenWidth / 2 + pan3DX);
+    int screenY = (int)(screenHeight / 2 - y2d + pan3DY);
+    
+    float grx = wx * cosR;
+    float grz = -wx * sinR;
+    float gry = wy * cosP - grz * sinP;
+    grz = wy * sinP + grz * cosP;
+    
+    float gsx = grx * (float)scaleFactor;
+    float gsy = gry * (float)scaleFactor;
+    float gsz = grz * (float)scaleFactor;
+    
+    float gx2d = (gsx * cosG) - (gsy * sinG);
+    float gy2d = -(gsx * sinG * sinA) - (gsy * cosG * sinA) + (gsz * cosA);
+    
+    int groundScreenX = (int)(gx2d + screenWidth / 2 + pan3DX);
+    int groundScreenY = (int)(screenHeight / 2 - gy2d + pan3DY);
+    
+    if (screenX > -50 && screenX < screenWidth + 50 && screenY > -50 && screenY < screenHeight + 50) {
+      float depthNorm = (rz - minZ) / zRange;
+      if (depthNorm < 0.0f) depthNorm = 0.0f;
+      if (depthNorm > 1.0f) depthNorm = 1.0f;
+      
+      uint8_t intensity = (uint8_t)(150 + 100 * (1.0f - depthNorm));
+      uint16_t color = ((intensity >> 3) << 11) | (((intensity >> 1)) << 5) | (intensity >> 3);
+      
+      canvas->drawLine(screenX, screenY, groundScreenX, groundScreenY, color);
+    }
+  }
+}
+
+// 绘制3D当前位置
+void RenderEngine::draw3DCurrentLocation(const Location& currentLocation) {
+  if (!currentLocation.isValid) return;
+  
+  // 检查canvas是否已设置
+  if (!canvas) return;
+  
+  // 计算当前位置的3D坐标并绘制
+  canvas->fillCircle(screenWidth / 2, screenHeight / 2, 5, TFT_RED);
+  canvas->fillCircle(screenWidth / 2, screenHeight / 2, 2, TFT_WHITE);
+}
+
+// 绘制3D UI信息
+void RenderEngine::draw3DUIInfo() {
+  // 绘制3D比例尺（右下角，始终显示）
+  draw3DScaleBar();
+  
+  // 只有当debug抽屉可见时才绘制调试信息
+  if (debugPosition <= -100) return;
+  
+  canvas->setTextColor(TFT_BLACK);
+  canvas->setTextSize(1);
+  
+  int startX = debugPosition;
+  int startY = 10;
+  int lineHeight = 12;  // 统一行距
+  
+  // 绘制标题
+  canvas->setCursor(startX, startY);
+  canvas->println("=== 3D VIEW ===");
+  
+  // 显示垂直放大系数
+  canvas->setCursor(startX, startY + lineHeight);
+  canvas->printf("Vert Exag: %.1f", verticalExaggeration);
+  
+  // 显示当前倾角
+  canvas->setCursor(startX, startY + lineHeight * 2);
+  canvas->printf("Pitch: %.1f deg", pitch * 180.0 / M_PI);
+  
+  canvas->setCursor(startX, startY + lineHeight * 3);
+  canvas->printf("Roll: %.1f deg", roll * 180.0 / M_PI);
+  
+  // 显示缩放因子
+  canvas->setCursor(startX, startY + lineHeight * 4);
+  canvas->printf("Scale: %.2f", scaleFactor);
+  
+  // 显示旋转中心模式
+  canvas->setCursor(startX, startY + lineHeight * 5);
+  canvas->printf("Center: %s", useCenterRotation ? "Grid" : "Start");
+  
+  // 显示剩余堆内存
+  canvas->setCursor(startX, startY + lineHeight * 6);
+  canvas->printf("Free: %luB", (unsigned long)esp_get_free_heap_size());
 }
 
 // 计算两个点之间的距离（米）

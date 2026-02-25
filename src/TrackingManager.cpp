@@ -145,33 +145,33 @@ double TrackingManager::calculateDistance(const Location& p1, const Location& p2
 }
 
 String TrackingManager::generateKMLFileName() const {
-  // 使用GPS时间生成文件名
+  // 使用GPS本地时间生成文件名
   String fileName = "hikepod_track_";
   
   if (gnssModule && gnssModule->isDateValid() && gnssModule->isTimeValid()) {
     // 添加年份
-    fileName += String(gnssModule->getYear());
-    if (gnssModule->getMonth() < 10) {
+    fileName += String(gnssModule->getLocalYear());
+    if (gnssModule->getLocalMonth() < 10) {
       fileName += "0";
     }
-    fileName += String(gnssModule->getMonth());
-    if (gnssModule->getDay() < 10) {
+    fileName += String(gnssModule->getLocalMonth());
+    if (gnssModule->getLocalDay() < 10) {
       fileName += "0";
     }
-    fileName += String(gnssModule->getDay());
+    fileName += String(gnssModule->getLocalDay());
     fileName += "_";
-    if (gnssModule->getHour() < 10) {
+    if (gnssModule->getLocalHour() < 10) {
       fileName += "0";
     }
-    fileName += String(gnssModule->getHour());
-    if (gnssModule->getMinute() < 10) {
+    fileName += String(gnssModule->getLocalHour());
+    if (gnssModule->getLocalMinute() < 10) {
       fileName += "0";
     }
-    fileName += String(gnssModule->getMinute());
-    if (gnssModule->getSecond() < 10) {
+    fileName += String(gnssModule->getLocalMinute());
+    if (gnssModule->getLocalSecond() < 10) {
       fileName += "0";
     }
-    fileName += String(gnssModule->getSecond());
+    fileName += String(gnssModule->getLocalSecond());
   } else {
     // 如果GPS时间不可用，使用系统时间
     time_t now = time(nullptr);

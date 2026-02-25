@@ -138,11 +138,11 @@ void InteractionManager::handleKeyboardInput(bool keyboardChanged, bool keyboard
         }
       }
       
-      // 检测减号键
+      // 检测减号键（包括Shift+-的_情况）
       bool minusPressed = false;
       if (!plusPressed) { // 如果已经检测到加号键，就不再检测减号键
         for (auto key : keys.word) {
-          if (key == '-') {
+          if (key == '-' || key == '_') {  // - 和 _ 都作为缩小
             minusPressed = true;
             break;  // 找到一个就停止，避免重复触发
           }

@@ -10,7 +10,8 @@ GNSSModule::GNSSModule() :
   txPin(0),
   baudRate(9600),
   isInitialized(false),
-  isInStandby(false) {
+  isInStandby(false),
+  timezoneOffsetHours(0) {
 }
 
 void GNSSModule::begin(int rxPin, int txPin, long baudRate) {
@@ -238,4 +239,139 @@ bool GNSSModule::isInStandbyMode() {
 // 设置待机模式状态
 void GNSSModule::setStandbyMode(bool standby) {
   isInStandby = standby;
+}
+
+int GNSSModule::getTimezoneOffset() {
+  return timezoneOffsetHours;
+}
+
+void GNSSModule::setTimezoneOffset(int offsetHours) {
+  timezoneOffsetHours = offsetHours;
+}
+
+void GNSSModule::calculateTimezoneFromLocation() {
+  if (currentLocation.isValid) {
+    timezoneOffsetHours = (int)round(currentLocation.longitude / 15.0);
+    Serial.printf("Timezone calculated from longitude %.2f: UTC%+d\n", 
+                  currentLocation.longitude, timezoneOffsetHours);
+  }
+}
+
+int GNSSModule::getLocalHour() {
+  if (!gps.time.isValid()) return 0;
+  
+  int localHour = gps.time.hour() + timezoneOffsetHours;
+  
+  if (localHour < 0) localHour += 24;
+  else if (localHour >= 24) localHour -= 24;
+  
+  return localHour;
+}
+
+int GNSSModule::getLocalMinute() {
+  return gps.time.minute();
+}
+
+int GNSSModule::getLocalSecond() {
+  return gps.time.second();
+}
+
+int GNSSModule::getLocalDay() {
+  if (!gps.date.isValid()) return 0;
+  
+  int hour = gps.time.hour() + timezoneOffsetHours;
+  int day = gps.date.day();
+  int month = gps.date.month();
+  int year = gps.date.year();
+  
+  if (hour < 0) {
+    hour += 24;
+    day--;
+    if (day < 1) {
+      month--;
+      if (month < 1) {
+        month = 12;
+        year--;
+      }
+      int daysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+      if (month == 2 && (year % 400 == 0 || (year % 100 != 0 && year % 4 == 0))) {
+        daysInMonth[1] = 29;
+      }
+      day = daysInMonth[month - 1];
+    }
+  } else if (hour >= 24) {
+    hour -= 24;
+    day++;
+    int daysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month == 2 && (year % 400 == 0 || (year % 100 != 0 && year % 4 == 0))) {
+      daysInMonth[1] = 29;
+    }
+    if (day > daysInMonth[month - 1]) {
+      day = 1;
+      month++;
+      if (month > 12) {
+        month = 1;
+      }
+    }
+  }
+  
+  return day;
+}
+
+int GNSSModule::getLocalMonth() {
+  if (!gps.date.isValid()) return 0;
+  
+  int hour = gps.time.hour() + timezoneOffsetHours;
+  int month = gps.date.month();
+  int year = gps.date.year();
+  
+  if (hour < 0) {
+    month--;
+    if (month < 1) {
+      month = 12;
+    }
+  } else if (hour >= 24) {
+    int day = gps.date.day();
+    int daysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month == 2 && (year % 400 == 0 || (year % 100 != 0 && year % 4 == 0))) {
+      daysInMonth[1] = 29;
+    }
+    if (day > daysInMonth[month - 1]) {
+      month++;
+      if (month > 12) {
+        month = 1;
+      }
+    }
+  }
+  
+  return month;
+}
+
+int GNSSModule::getLocalYear() {
+  if (!gps.date.isValid()) return 0;
+  
+  int hour = gps.time.hour() + timezoneOffsetHours;
+  int year = gps.date.year();
+  
+  if (hour < 0) {
+    int month = gps.date.month();
+    if (month == 1) {
+      year--;
+    }
+  } else if (hour >= 24) {
+    int month = gps.date.month();
+    int day = gps.date.day();
+    int daysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month == 2 && (year % 400 == 0 || (year % 100 != 0 && year % 4 == 0))) {
+      daysInMonth[1] = 29;
+    }
+    if (day > daysInMonth[month - 1]) {
+      month++;
+      if (month > 12) {
+        year++;
+      }
+    }
+  }
+  
+  return year;
 }

@@ -32,7 +32,7 @@ public:
   
 private:
   // 内存池相关
-  static const int MAX_POINTS = 5000; // 最大点数量
+  static const int MAX_POINTS = 10000; // 最大点数量
   Location* pointPool; // 预分配的内存池
   int currentPointCount; // 当前点数量
   String routeName;

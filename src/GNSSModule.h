@@ -4,16 +4,16 @@
 #include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
 
-// 位置结构体
+// 位置结构体（使用float节省内存）
 struct Location {
-  double latitude;
-  double longitude;
-  double altitude;
+  float latitude;
+  float longitude;
+  float altitude;
   bool isValid;
   
   Location() : latitude(0), longitude(0), altitude(0), isValid(false) {}
   Location(double lat, double lng, double alt = 0) : 
-    latitude(lat), longitude(lng), altitude(alt), isValid(true) {}
+    latitude((float)lat), longitude((float)lng), altitude((float)alt), isValid(true) {}
 };
 
 class GNSSModule {
@@ -80,6 +80,31 @@ public:
   // 检查时间是否有效
   bool isTimeValid();
   
+  // 时区计算（基于经度）
+  int getTimezoneOffset();
+  void setTimezoneOffset(int offsetHours);
+  
+  // 获取本地时间（时）
+  int getLocalHour();
+  
+  // 获取本地时间（分）
+  int getLocalMinute();
+  
+  // 获取本地时间（秒）
+  int getLocalSecond();
+  
+  // 获取本地日期（日）
+  int getLocalDay();
+  
+  // 获取本地日期（月）
+  int getLocalMonth();
+  
+  // 获取本地日期（年）
+  int getLocalYear();
+  
+  // 根据经度自动计算时区
+  void calculateTimezoneFromLocation();
+  
   // 获取调试计数器
   uint32_t getGpsChars();
   uint32_t getGpsSentences();
@@ -102,6 +127,7 @@ private:
   long baudRate;
   bool isInitialized;
   bool isInStandby; // 跟踪是否处于待机模式
+  int timezoneOffsetHours; // 时区偏移（小时）
   
   // 调试计数器
   static uint32_t gpsChars;

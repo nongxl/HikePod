@@ -20,6 +20,12 @@ enum MapZoom {
   ZOOM_25KM
 };
 
+// 视图模式定义
+enum ViewMode {
+  MODE_2D,         // 2D视图模式
+  MODE_3D          // 3D地形模式
+};
+
 class RenderEngine {
 public:
   RenderEngine();
@@ -46,16 +52,16 @@ public:
   void setPanOffset(int x, int y);
   
   // 居中到指定位置
-  void centerOnLocation(double lat, double lng);
+  void centerOnLocation(float lat, float lng);
   
   // 基于中心点缩放
-  void zoomAroundPoint(double lat, double lng, int newZoomLevel);
+  void zoomAroundPoint(float lat, float lng, int newZoomLevel);
   
   // 渲染整个界面
   void render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0);
   
   // 坐标转换：经纬度到屏幕坐标
-  void latLngToScreen(double lat, double lng, int& x, int& y);
+  void latLngToScreen(float lat, float lng, int& x, int& y);
   
   // 设置GNSS模块引用
   void setGNSSModule(GNSSModule* gnssModule);
@@ -111,6 +117,35 @@ public:
   // 获取定位点锁定状态
   bool isLocationLockedState() const;
   
+  // 3D渲染相关方法
+  void setViewMode(ViewMode mode);
+  void setVerticalExaggeration(float value);
+  void setCameraDistance(float distance);
+  void setScaleFactor(float scale);
+  void setOrientation(float pitchAngle, float rollAngle);
+  void setReferenceOrientation(float pitchAngle, float rollAngle);
+  void updateCameraOrientation(float currentPitch, float currentRoll, float accelX, float accelY);
+  void increaseVerticalExaggeration();
+  void decreaseVerticalExaggeration();
+  void zoom3D(float factor);  // 3D缩放
+  
+  // 3D视图平移
+  void pan3D(int dx, int dy);  // 平移3D视图
+  
+  // 切换旋转中心模式
+  void toggleRotationCenter();  // 切换旋转中心：起点/地面网格中心
+  
+  // 重置3D视图
+  void reset3DView();  // 重置3D视图到默认状态
+  
+  // 3D世界坐标构建（KML加载时调用一次）
+  void buildWorldPoints(const Location* pointPool, int pointCount);
+  void releaseWorldPoints();
+  void invalidateWorldPoints();  // 标记世界坐标需要重新构建
+  
+  // 3D渲染核心方法
+  void render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0);
+  
 private:
   int screenWidth;
   int screenHeight;
@@ -122,12 +157,12 @@ private:
   GNSSModule* gnssModule;
   
   // 边界框（保留用于兼容性，但不再用于坐标转换）
-  double minLat, maxLat, minLng, maxLng;
+  float minLat, maxLat, minLng, maxLng;
   
   // 统一的地图投影参数
-  double viewCenterLat;    // 当前视图中心纬度（度）
-  double viewCenterLng;    // 当前视图中心经度（度）
-  double pixelsPerMeter;   // 统一缩放参数：每米对应的像素数
+  float viewCenterLat;    // 当前视图中心纬度（度）
+  float viewCenterLng;    // 当前视图中心经度（度）
+  float pixelsPerMeter;   // 统一缩放参数：每米对应的像素数
   
   // 缩放和平移
   int zoomLevel;
@@ -170,14 +205,80 @@ private:
   int trackingDotCounter;
   unsigned long lastDotUpdateTime;
   
+  // 3D渲染相关
+  ViewMode viewMode;         // 当前视图模式
+  float verticalExaggeration; // 垂直放大系数
+  float cameraDistance;     // 相机距离
+  float scaleFactor;        // 缩放因子
+  bool userScaleFactor;      // 用户是否手动设置了缩放因子
+  float pitch;              // 俯仰角（绕X轴）
+  float roll;               // 横滚角（绕Y轴）
+  
+  // 参考姿态（进入3D模式时的初始姿态）
+  bool hasReferenceOrientation;  // 是否已设置参考姿态
+  float refPitch;           // 参考俯仰角
+  float refRoll;            // 参考横滚角
+  
+  // 平滑过渡的目标姿态
+  float targetPitch;        // 目标俯仰角
+  float targetRoll;         // 目标横滚角
+  
+  // 视角平移（基于加速度估算）
+  float viewOffsetX;        // 视角X偏移
+  float viewOffsetY;        // 视角Y偏移
+  float targetViewOffsetX;  // 目标视角X偏移
+  float targetViewOffsetY;  // 目标视角Y偏移
+  
+  // 3D视图平移（用户手动调整）
+  float pan3DX;             // 3D视图X平移（像素）
+  float pan3DY;             // 3D视图Y平移（像素）
+  
+  // 旋转中心模式
+  bool useCenterRotation;   // true: 以地面网格中心旋转, false: 以起点旋转
+  
+  // 世界坐标缓存（KML加载时计算一次）
+  struct WorldPoint {
+    float x;  // 公里
+    float y;  // 公里
+    float z;  // 公里（已应用垂直放大）
+  };
+  
+  // 线段索引结构（用于深度排序，不复制坐标）
+  struct SegmentRef {
+    uint16_t i1;     // 起点索引
+    uint16_t i2;     // 终点索引
+    float depth;     // 平均深度
+  };
+  
+  // 动态分配的世界坐标数组
+  WorldPoint* worldPoints;
+  int worldPointCount;
+  
+  // 动态分配的线段索引数组
+  SegmentRef* segments;
+  int segmentCount;
+  
+  // 缓存的常量（加载时计算一次）
+  float cosLat0;           // cos(lat0)
+  float minWorldX, maxWorldX, minWorldY, maxWorldY;  // 世界坐标范围
+  
+  // 缓存原始数据引用
+  const Location* cachedPointPool;
+  int cachedPointCount;
+  double cachedLat0, cachedLon0, cachedAlt0;
+  
+  // 地面平面相关
+  double routeMinX, routeMaxX, routeMinY, routeMaxY;
+  double groundGridSize;
+  
   // 计算缩放因子
   double calculateScaleFactor();
   
   // 统一的地图投影方法
   void updatePixelsPerMeter();
-  double getPixelsPerMeter();
-  void latLngToMeters(double lat, double lng, double& dx, double& dy);
-  void metersToScreen(double dx, double dy, int& x, int& y);
+  float getPixelsPerMeter();
+  void latLngToMeters(float lat, float lng, float& dx, float& dy);
+  void metersToScreen(float dx, float dy, int& x, int& y);
   
   // 绘制轨迹
   void drawRoute(const std::vector<Location>& routePoints);
@@ -194,6 +295,9 @@ private:
   // 绘制比例尺
   void drawScaleBar();
   
+  // 绘制3D比例尺（横纵十字）
+  void draw3DScaleBar();
+  
   // 绘制操作提示
   void drawOperationHint();
   
@@ -208,6 +312,13 @@ private:
   
   // 找到最近的路线线段并计算进度
   bool findClosestSegment(const Location* pointPool, int pointCount, const Location& currentLocation, double& progress, double& distance);
+  
+  // 3D渲染私有方法
+  void draw3DCurrentLocation(const Location& currentLocation);
+  void draw3DUIInfo();
+  void draw3DGroundPlane(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG);
+  void draw3DVerticalLines(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG, float minZ, float zRange, float centerX, float centerY);
+  void draw3DGroundProjection(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG, float minZ, float zRange, float centerX, float centerY);
 };
 
 #endif // RENDER_ENGINE_H
