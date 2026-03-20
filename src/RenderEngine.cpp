@@ -242,13 +242,13 @@ void RenderEngine::setPanOffset(int x, int y) {
   panOffsetY = y;
 }
 
-void RenderEngine::render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount, const POI* poiPool, int poiCount, bool showPOIs) {
+void RenderEngine::render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount, const POI* poiPool, int poiCount, int showPOIsMode) {
   // 检查canvas是否已设置
   if (!canvas) return;
   
   // 根据视图模式选择渲染方法
   if (viewMode == MODE_3D) {
-    render3D(routePoints, currentLocation, trackPoints, sdInitialized, hasRoute, pointPool, pointCount, poiPool, poiCount, showPOIs);
+    render3D(routePoints, currentLocation, trackPoints, sdInitialized, hasRoute, pointPool, pointCount, poiPool, poiCount, showPOIsMode);
     return;
   }
   
@@ -285,8 +285,10 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
   drawCurrentLocation(currentLocation, routePoints);
   
   // 绘制 2D 关键点
-  if (showPOIs) {
+  if (showPOIsMode == 1) {
     drawPOIs(poiPool, poiCount, true);
+  } else if (showPOIsMode == 2) {
+    drawPOIsAuto(poiPool, poiCount, currentLocation, (pointPool != nullptr && pointCount > 0) ? pointPool : routePoints.data(), (pointPool != nullptr && pointCount > 0) ? pointCount : routePoints.size());
   }
   
   // 绘制坐标信息
@@ -1328,7 +1330,7 @@ void RenderEngine::invalidateWorldPoints() {
 }
 
 // 3D渲染核心方法实现
-void RenderEngine::render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount, const POI* poiPool, int poiCount, bool showPOIs) {
+void RenderEngine::render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount, const POI* poiPool, int poiCount, int showPOIsMode) {
   if (!canvas) return;
   
   if (worldPointCount == 0 || worldPoints == nullptr) {
@@ -1538,11 +1540,59 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
   draw3DVerticalLines(cosP, sinP, cosR, sinR, sinA, cosA, sinG, cosG, minZ, zRange, centerX, centerY);
   
   // 绘制 3D 关键点
-  if (showPOIs && poiPool && poiCount > 0) {
+  if (showPOIsMode != 0 && poiPool && poiCount > 0) {
     const float EARTH_RADIUS_KM = 6378.137f;
     const float DEG2RAD = PI / 180.0f;
     
+    // 自动模式过滤
+    int prevIdx = -1;
+    int nextIdx = -1;
+    if (showPOIsMode == 2 && currentLocation.isValid) {
+        const Location* dataPoints = (pointPool != nullptr && pointCount > 0) ? pointPool : routePoints.data();
+        int dataPointCount = (pointPool != nullptr && pointCount > 0) ? pointCount : routePoints.size();
+        
+        if (dataPointCount >= 2) {
+            // 更新缓存
+            if (lastPoiPoolPtr != poiPool || lastPoiCount != poiCount || lastPointPoolPtr != dataPoints || lastPointCount != dataPointCount) {
+                poiProgressCache.clear();
+                for (int i = 0; i < poiCount; i++) {
+                    double p, d;
+                    findClosestSegment(dataPoints, dataPointCount, poiPool[i].loc, p, d);
+                    poiProgressCache.push_back(p);
+                }
+                lastPoiPoolPtr = poiPool;
+                lastPoiCount = poiCount;
+                lastPointPoolPtr = dataPoints;
+                lastPointCount = dataPointCount;
+            }
+
+            double userProgress, userDist;
+            if (findClosestSegment(dataPoints, dataPointCount, currentLocation, userProgress, userDist)) {
+                double maxPrevProg = -1.0;
+                double minNextProg = 2.0;
+
+                for (int i = 0; i < (int)poiProgressCache.size(); i++) {
+                    double pProg = poiProgressCache[i];
+                    if (pProg <= userProgress) {
+                        if (pProg > maxPrevProg) {
+                            maxPrevProg = pProg;
+                            prevIdx = i;
+                        }
+                    } else {
+                        if (pProg < minNextProg) {
+                            minNextProg = pProg;
+                            nextIdx = i;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for (int i = 0; i < poiCount; i++) {
+        // 如果是自动模式且不属于选中的两个，跳过
+        if (showPOIsMode == 2 && i != prevIdx && i != nextIdx) continue;
+        
         float dLon = (poiPool[i].loc.longitude - cachedLon0) * DEG2RAD;
         float dLat = (poiPool[i].loc.latitude - cachedLat0) * DEG2RAD;
         
@@ -2287,4 +2337,55 @@ void RenderEngine::simplifyPathDouglasPeucker(WorldPoint* points, int& count, fl
   }
   count = newCount;
   delete[] keep;
+}
+void RenderEngine::drawPOIsAuto(const POI* poiPool, int poiCount, const Location& currentLocation, const Location* pointPool, int pointCount) {
+  if (!poiPool || poiCount <= 0 || !pointPool || pointCount < 2 || !currentLocation.isValid) return;
+
+  // 检测并更新缓存
+  if (lastPoiPoolPtr != poiPool || lastPoiCount != poiCount || lastPointPoolPtr != pointPool || lastPointCount != pointCount) {
+      poiProgressCache.clear();
+      for (int i = 0; i < poiCount; i++) {
+          double progress, dist;
+          findClosestSegment(pointPool, pointCount, poiPool[i].loc, progress, dist);
+          poiProgressCache.push_back(progress);
+      }
+      lastPoiPoolPtr = poiPool;
+      lastPoiCount = poiCount;
+      lastPointPoolPtr = pointPool;
+      lastPointCount = pointCount;
+      Serial.println("[POI Cache] Updated POI progress cache");
+  }
+
+  double userProgress, userDist;
+  if (!findClosestSegment(pointPool, pointCount, currentLocation, userProgress, userDist)) return;
+
+  int prevIdx = -1;
+  int nextIdx = -1;
+  double maxPrevProg = -1.0;
+  double minNextProg = 2.0;
+
+  for (int i = 0; i < (int)poiProgressCache.size(); i++) {
+      double pProg = poiProgressCache[i];
+      if (pProg <= userProgress) {
+          if (pProg > maxPrevProg) {
+              maxPrevProg = pProg;
+              prevIdx = i;
+          }
+      } else {
+          if (pProg < minNextProg) {
+              minNextProg = pProg;
+              nextIdx = i;
+          }
+      }
+  }
+
+  // 绘制选中的两个 POI
+  if (prevIdx != -1) {
+      POI temp[1] = {poiPool[prevIdx]};
+      drawPOIs(temp, 1, true);
+  }
+  if (nextIdx != -1 && nextIdx != prevIdx) {
+      POI temp[1] = {poiPool[nextIdx]};
+      drawPOIs(temp, 1, true);
+  }
 }

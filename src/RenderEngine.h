@@ -61,7 +61,7 @@ public:
   void zoomAroundPoint(float lat, float lng, int newZoomLevel);
   
   // 渲染整个界面
-  void render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0, const POI* poiPool = nullptr, int poiCount = 0, bool showPOIs = false);
+  void render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0, const POI* poiPool = nullptr, int poiCount = 0, int showPOIsMode = 0);
   
   // 坐标转换：经纬度到屏幕坐标
   void latLngToScreen(float lat, float lng, int& x, int& y);
@@ -151,7 +151,7 @@ public:
   void autoFitToRoute();       // 自动缩放并居中路径
   
   // 3D渲染核心方法
-  void render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0, const POI* poiPool = nullptr, int poiCount = 0, bool showPOIs = false);
+  void render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0, const POI* poiPool = nullptr, int poiCount = 0, int showPOIsMode = 0);
   
   
 private:
@@ -344,6 +344,15 @@ private:
   
   // 计算点到直线的距离（2D）
   float pointLineDistance(WorldPoint p, WorldPoint a, WorldPoint b);
+  // 自动模式下的关键点绘制
+  void drawPOIsAuto(const POI* poiPool, int poiCount, const Location& currentLocation, const Location* pointPool, int pointCount);
+  
+  // POI 进度缓存
+  std::vector<double> poiProgressCache;
+  const POI* lastPoiPoolPtr = nullptr;
+  int lastPoiCount = 0;
+  const Location* lastPointPoolPtr = nullptr;
+  int lastPointCount = 0;
 };
 
 #endif // RENDER_ENGINE_H

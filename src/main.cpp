@@ -142,7 +142,7 @@ bool helpMenuVisible = false; // 帮助菜单是否可见
 int settingsMenuSelection = 0; // 当前选中的设置选项
 const int SETTINGS_MENU_OPTIONS = 6; // 设置选项数量（文件 + 亮度 + 超时 + 2个频率 + POI开关）
 String currentKmlFile = ""; // 当前加载的 KML 文件名
-bool showPOIs = true;      // 是否显示关键点
+int showPOIsMode = 2;      // 关键点显示模式 (0:OFF, 1:ON, 2:AUTO)
 
 // WiFi KML 管理窗口显示标志
 bool httpServerMenuOpen = false;
@@ -394,7 +394,7 @@ void loadSelectedKMLFile(const String& fileName) {
   if (currentViewMode == MODE_3D) {
     currentViewMode = MODE_2D;
     renderEngine.setViewMode(MODE_2D);
-    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, nullptr, 0, nullptr, 0, showPOIs);
+    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, nullptr, 0, nullptr, 0, showPOIsMode);
     canvas.pushSprite(0, 0);
   }
   
@@ -482,7 +482,7 @@ currentKmlFile = fileName; // 保存当前加载的文件名
   fileSelectionMenuOpen = false;
   
   // 重新渲染界面
-  renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+  renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
   canvas.pushSprite(0, 0);
 }
 
@@ -1229,7 +1229,7 @@ void loop() {
             Serial.println("Cancel key pressed");
             fileSelectionMenuOpen = false;
             openMenu = false;
-            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
             canvas.pushSprite(0, 0);
             Serial.println("File selection menu closed by cancel");
             hasNavigationKey = true;
@@ -1254,7 +1254,7 @@ void loop() {
               fileSelectionMenuOpen = false;
               openMenu = false;
               // 重新渲染界面
-              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
               canvas.pushSprite(0, 0);
               Serial.println("File selection menu closed after selecting file");
               // 重置菜单打开日志标志
@@ -1276,7 +1276,7 @@ void loop() {
     if (needRender || currentTime - lastRenderTime > RENDER_INTERVAL) {
       if (!openMenu && !gpsNoFixAlertVisible && !helpMenuVisible) { // 只有在没有菜单打开且没有提示信息框时才渲染
         // 渲染界面，传递内存池信息以绘制完整路径和已记录的轨迹
-        renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+        renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
         canvas.pushSprite(0, 0);  // 推送至屏幕
         lastRenderTime = currentTime;
       }
@@ -1333,7 +1333,7 @@ void loop() {
     canvas.fillScreen(TFT_BLACK);
     if (currentMode == MODE_HIKEPOD) {
       // 渲染界面，传递内存池信息以绘制完整路径和已记录的轨迹
-      renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+      renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
       canvas.pushSprite(0, 0);  // 推送至屏幕
       renderEngine.reset3DView(); // 切换模式时重置 3D 视图到默认姿态与缩放
     } else {
@@ -1392,7 +1392,7 @@ void drawHttpServerWindow(bool should_I) {
     httpServerMenuOpen = false;
     openMenu = false;
     // 渲染地图
-    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
     canvas.pushSprite(0, 0);
   }
 }
@@ -1492,7 +1492,7 @@ void drawHikePodHelpMenu(bool should_I) {
     openMenu = false;
     helpMenuVisible = false;
     // 重新渲染界面
-    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
     canvas.pushSprite(0, 0);
   }
 }
@@ -1569,7 +1569,9 @@ void drawSettingsMenu(bool should_I) {
     canvas.setCursor(20, y);
     canvas.print("> Show POIs : ");
     canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-    canvas.print(showPOIs ? "ON" : "OFF");
+    if (showPOIsMode == 0) canvas.print("OFF");
+    else if (showPOIsMode == 1) canvas.print("ON");
+    else canvas.print("AUTO");
     y += 6;
     
     // 添加电量消耗曲线
@@ -1683,7 +1685,7 @@ void drawSettingsMenu(bool should_I) {
     openMenu = false;
     settingsMenuOpen = false;
     // 渲染界面，传递内存池信息以绘制完整路径和已记录的轨迹
-    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
     canvas.pushSprite(0, 0);  // 推送至屏幕
   }
 }
@@ -2207,9 +2209,9 @@ void drawConfig(bool should_I) {
     } else if (currentMode == MODE_HIKEPOD) {
       // 3D视图模式，需要重新渲染
       if (currentViewMode == MODE_3D) {
-        renderEngine.render3D(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+        renderEngine.render3D(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
       } else {
-        renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+        renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
       }
       // 确保亮度设置生效
       M5Cardputer.Display.setBrightness(screenBrightness);
@@ -2319,7 +2321,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
         gpsNoFixAlertVisible = false;
         kmlFullAlertVisible = false;
         // 重新渲染界面
-        renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+        renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
         canvas.pushSprite(0, 0);
         return;
       }
@@ -2378,7 +2380,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             lastVPress = currentTime;
             Serial.printf("Switched to %s view mode\n", currentViewMode == MODE_2D ? "2D" : "3D");
             // 重新渲染界面
-            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
             // 确保亮度设置生效
             M5Cardputer.Display.setBrightness(screenBrightness);
             canvas.pushSprite(0, 0);
@@ -2394,7 +2396,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             lastBracketPress = currentTime;
             Serial.println("Increased vertical exaggeration");
             // 重新渲染界面
-            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
             canvas.pushSprite(0, 0);
           }
         } else if (key == '[') {
@@ -2408,7 +2410,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             lastBracketPress2 = currentTime;
             Serial.println("Decreased vertical exaggeration");
             // 重新渲染界面
-            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
             canvas.pushSprite(0, 0);
           }
         } else if (key == '=' || key == '+') {
@@ -2422,7 +2424,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               renderEngine.zoom3D(1.2);  // 放大20%
               lastEqualPress = currentTime;
               Serial.println("3D Zoom in");
-              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
               canvas.pushSprite(0, 0);
             }
           }
@@ -2437,7 +2439,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               renderEngine.zoom3D(0.8);  // 缩小20%
               lastMinusPress = currentTime;
               Serial.println("3D Zoom out");
-              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
               canvas.pushSprite(0, 0);
             }
           }
@@ -2451,7 +2453,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             if (currentTime - lastSpacePress > SPACE_DEBOUNCE_DELAY) {
               renderEngine.toggleRotationCenter();
               lastSpacePress = currentTime;
-              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
               canvas.pushSprite(0, 0);
             }
           }
@@ -2472,7 +2474,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             } else if (key == '-') { // '-' 键用于 3D 缩放
               renderEngine.zoom3D(0.9f);
             }
-            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
             canvas.pushSprite(0, 0);
           }
         } else if (key == 'c' && currentMode == MODE_HIKEPOD) {
@@ -2548,7 +2550,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                   }
                   break;
                 case 5: // Show POIs
-                  showPOIs = !showPOIs;
+                  showPOIsMode = (showPOIsMode + 1) % 3;
                   break;
             }
             drawSettingsMenu(true);
@@ -2572,7 +2574,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                   GPS_UPDATE_INTERVAL_SCREEN_OFF = min(GPS_UPDATE_INTERVAL_SCREEN_OFF + 2000, 30000UL);
                   break;
                 case 5: // Show POIs
-                  showPOIs = !showPOIs;
+                  showPOIsMode = (showPOIsMode + 1) % 3;
                   break;
             }
             drawSettingsMenu(true);
@@ -2604,11 +2606,11 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               canvas.println("No KML files found");
               canvas.pushSprite(0, 0);
               delay(1000);
-              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIs);
+              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
               canvas.pushSprite(0, 0);
             }
           } else if (settingsMenuSelection == 5) { // Show POIs
-            showPOIs = !showPOIs;
+            showPOIsMode = (showPOIsMode + 1) % 3;
             drawSettingsMenu(true);
           }
         }
