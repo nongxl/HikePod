@@ -4,6 +4,12 @@
 #include <vector>
 #include "GNSSModule.h"
 
+// 关键点结构体
+struct POI {
+  String name;
+  Location loc;
+};
+
 class KMLParser {
 public:
   KMLParser();
@@ -15,10 +21,13 @@ public:
   // 获取解析后的路线点
   std::vector<Location> getRoutePoints();
   
-  // 获取轨迹名称
+  // 获取解析到的路径名称
   String getRouteName();
   
-  // 获取起点坐标
+  // 检查是否达到内存限制
+  bool isMemoryFull();
+  
+  // 获取路径起点
   Location getStartPoint();
   
   // 获取当前解析的点数量
@@ -30,24 +39,34 @@ public:
   // 直接获取内存池中的点数据（用于计算边界框等操作）
   const Location* getPointPool();
   
+  // 设置采样率（默认1，每N个点取一个）
+  void setDownsampleRate(int rate);
+  
+  // POI 访问
+  int getPOICount() const { return poiCount; }
+  const POI* getPOIPool() const { return poiPool; }
+  
 private:
   // 内存池相关
-  static const int MAX_POINTS = 10000; // 最大点数量
+  static const int MAX_POINTS = 8000; // 最大点数量
+  static const int MAX_POIS = 200;    // 最大关键点数量
+  
   Location* pointPool; // 预分配的内存池
   int currentPointCount; // 当前点数量
+  
+  POI poiPool[MAX_POIS]; // 关键点池
+  int poiCount;
+  int downsampleRate; // 采样率
+  int rawPointCounter; // 原始点计数器（用于采样）
   String routeName;
   
-  // 直接从文件解析（低内存占用）
+  // POI 解析临时状态
+  String currentPoiName;
+  Location currentPoiLoc;
+  bool hasPoiLoc;
+  
+  // 直接从文件解析（低内存占用，流式实现）
   bool parseFileDirect(const char* filePath);
-  
-  // 解析坐标字符串
-  bool parseCoordinates(const String& coordinatesStr);
-  
-  // 解析Google扩展gx:Track格式
-  bool parseGxTrack(const String& trackContent);
-  
-  // 从文件中读取KML内容
-  String readFileContent(const char* filePath);
   
   // 添加点到内存池
   bool addPointToPool(double lat, double lng, double alt);

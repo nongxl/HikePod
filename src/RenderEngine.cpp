@@ -19,7 +19,9 @@ const double ZOOM_VIEW_WIDTHS[] = {
   1000.0,     // ZOOM_1KM
   5000.0,     // ZOOM_5KM
   10000.0,    // ZOOM_10KM
-  25000.0     // ZOOM_25KM
+  25000.0,    // ZOOM_25KM
+  50000.0,    // ZOOM_50KM
+  100000.0    // ZOOM_100KM
 };
 
 RenderEngine::RenderEngine() : 
@@ -78,6 +80,8 @@ RenderEngine::RenderEngine() :
   maxWorldX(0.0f),
   minWorldY(0.0f),
   maxWorldY(0.0f),
+  minWorldZ(0.0f),
+  maxWorldZ(0.0f),
   routeMinX(0.0),
   routeMaxX(0.0),
   routeMinY(0.0),
@@ -182,8 +186,50 @@ void RenderEngine::calculateBoundingBoxFromPool(const Location* pointPool, int p
   viewCenterLng = (minLng + maxLng) / 2.0;
 }
 
+void RenderEngine::autoFitToRoute() {
+  if (minLat >= maxLat || minLng >= maxLng) return;
+
+  // 设置中心点为起点（用户要求起点居中）
+  viewCenterLat = startPoint.latitude;
+  viewCenterLng = startPoint.longitude;
+  
+  // 重置平移偏移（配合起点居中）
+  panOffsetX = 0;
+  panOffsetY = 0;
+
+  // 计算路径对角线跨度
+  double distLat = calculateDistance(Location(minLat, minLng), Location(maxLat, minLng));
+  double distLng = calculateDistance(Location(minLat, minLng), Location(minLat, maxLng));
+  double maxSpan = (distLat > distLng) ? distLat : distLng;
+  
+  // 加上 20% 的余量
+  double requiredWidth = maxSpan * 1.2;
+
+  // 寻找合适的缩放级别：找到第一个能容纳 requiredWidth 的级别
+  int bestZoom = 12; // 默认最大宽度（最小缩放）
+  for (int i = 0; i <= 12; i++) {
+    if (ZOOM_VIEW_WIDTHS[i] >= requiredWidth) {
+      bestZoom = i;
+      break;
+    }
+  }
+  
+  zoomLevel = bestZoom;
+  updatePixelsPerMeter();
+  
+  Serial.print("=== RenderEngine: Auto-fit. MaxSpan=");
+  Serial.print(maxSpan);
+  Serial.print("m, RequiredWidth=");
+  Serial.print(requiredWidth);
+  Serial.print("m, Chosen Zoom=");
+  Serial.print(zoomLevel);
+  Serial.print(" (Width: ");
+  Serial.print(ZOOM_VIEW_WIDTHS[zoomLevel]);
+  Serial.println("m)");
+}
+
 void RenderEngine::setZoomLevel(int level) {
-  zoomLevel = constrain(level, 0, 10);
+  zoomLevel = constrain(level, 0, 12);
   updatePixelsPerMeter();
 }
 
@@ -196,13 +242,13 @@ void RenderEngine::setPanOffset(int x, int y) {
   panOffsetY = y;
 }
 
-void RenderEngine::render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount) {
+void RenderEngine::render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount, const POI* poiPool, int poiCount, bool showPOIs) {
   // 检查canvas是否已设置
   if (!canvas) return;
   
   // 根据视图模式选择渲染方法
   if (viewMode == MODE_3D) {
-    render3D(routePoints, currentLocation, trackPoints, sdInitialized, hasRoute, pointPool, pointCount);
+    render3D(routePoints, currentLocation, trackPoints, sdInitialized, hasRoute, pointPool, pointCount, poiPool, poiCount, showPOIs);
     return;
   }
   
@@ -237,6 +283,11 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
   
   // 绘制当前位置
   drawCurrentLocation(currentLocation, routePoints);
+  
+  // 绘制 2D 关键点
+  if (showPOIs) {
+    drawPOIs(poiPool, poiCount, true);
+  }
   
   // 绘制坐标信息
   drawCoordinateInfo(currentLocation);
@@ -466,6 +517,26 @@ void RenderEngine::latLngToScreen(float lat, float lng, int& x, int& y) {
   metersToScreen(dx, dy, x, y);
 }
 
+void RenderEngine::screenToLatLng(int x, int y, float& lat, float& lng) {
+  int screenCenterX = screenWidth / 2;
+  int screenCenterY = screenHeight / 2;
+  
+  // 从 metersToScreen 反推 dx, dy
+  // x = screenCenterX + dx * pixelsPerMeter + panOffsetX => dx = (x - screenCenterX - panOffsetX) / pixelsPerMeter
+  // y = screenCenterY - dy * pixelsPerMeter + panOffsetY => dy = (screenCenterY + panOffsetY - y) / pixelsPerMeter
+  
+  float dx = (float)(x - screenCenterX - panOffsetX) / pixelsPerMeter;
+  float dy = (float)(screenCenterY + panOffsetY - y) / pixelsPerMeter;
+  
+  // 从 latLngToMeters 反推 lat, lng
+  // dy = (lat1 - lat0) * EARTH_RADIUS => lat1 = lat0 + dy / EARTH_RADIUS
+  // dx = (lng1 - lng0) * cosf(lat0) * EARTH_RADIUS => lng1 = lng0 + dx / (cosf(lat0) * EARTH_RADIUS)
+  
+  float lat0 = viewCenterLat * (float)M_PI / 180.0f;
+  lat = viewCenterLat + (dy / (float)EARTH_RADIUS) * 180.0f / (float)M_PI;
+  lng = viewCenterLng + (dx / (cosf(lat0) * (float)EARTH_RADIUS)) * 180.0f / (float)M_PI;
+}
+
 void RenderEngine::centerOnLocation(float lat, float lng) {
   viewCenterLat = lat;
   viewCenterLng = lng;
@@ -484,24 +555,24 @@ void RenderEngine::zoomAroundPoint(float lat, float lng, int newZoomLevel) {
   int oldScreenX, oldScreenY;
   metersToScreen(dx, dy, oldScreenX, oldScreenY);
   
+  // 记录缩放前的 pixelsPerMeter
+  float oldPixelsPerMeter = pixelsPerMeter;
+  
   zoomLevel = constrain(newZoomLevel, 0, 10);
   updatePixelsPerMeter();
   
-  metersToScreen(dx, dy, oldScreenX, oldScreenY);
+  // 计算新的 panOffset 以保持 lat/lng 在屏幕上的位置不变
+  // newScreenX = screenCenterX + dx * pixelsPerMeter_new + panOffsetX_new
+  // oldScreenX = screenCenterX + dx * pixelsPerMeter_old + panOffsetX_old
+  // 我们要求 newScreenX = oldScreenX
+  // panOffsetX_new = panOffsetX_old + dx * (pixelsPerMeter_old - pixelsPerMeter_new)
   
-  if (lat != viewCenterLat || lng != viewCenterLng) {
-    float centerDx, centerDy;
-    latLngToMeters(viewCenterLat, viewCenterLng, centerDx, centerDy);
-    
-    int expectedScreenX, expectedScreenY;
-    metersToScreen(dx, dy, expectedScreenX, expectedScreenY);
-    
-    panOffsetX = oldScreenX - expectedScreenX;
-    panOffsetY = oldScreenY - expectedScreenY;
-  } else {
-    panOffsetX = 0;
-    panOffsetY = 0;
-  }
+  panOffsetX += (int)(dx * (oldPixelsPerMeter - pixelsPerMeter));
+  panOffsetY -= (int)(dy * (oldPixelsPerMeter - pixelsPerMeter)); // 注意：y 轴 dx 是减号，dy 也是反向的
+  
+  // 调试日志
+  Serial.printf("[ZOOM] zoomAroundPoint: zoom=%d, dx=%.2f, dy=%.2f, ppm_old=%.4f, ppm_new=%.4f, panX=%d, panY=%d\n", 
+                zoomLevel, dx, dy, oldPixelsPerMeter, pixelsPerMeter, panOffsetX, panOffsetY);
 }
 
 void RenderEngine::setGNSSModule(GNSSModule* module) {
@@ -531,7 +602,7 @@ double RenderEngine::calculateScaleFactor() {
 }
 
 void RenderEngine::updatePixelsPerMeter() {
-  int zoomIndex = constrain(zoomLevel, 0, 10);
+  int zoomIndex = constrain(zoomLevel, 0, 12);
   float viewWidthMeters = (float)ZOOM_VIEW_WIDTHS[zoomIndex];
   pixelsPerMeter = screenWidth / viewWidthMeters;
 }
@@ -1071,7 +1142,7 @@ void RenderEngine::updateCameraOrientation(float currentPitch, float currentRoll
   float deltaPitch = currentPitch - refPitch;
   float deltaRoll = currentRoll - refRoll;
   
-  const float MAX_ANGLE = 60.0f * (float)M_PI / 180.0f;
+  const float MAX_ANGLE = 90.0f * (float)M_PI / 180.0f;
   deltaPitch = constrain(deltaPitch, -MAX_ANGLE, MAX_ANGLE);
   deltaRoll = constrain(deltaRoll, -MAX_ANGLE, MAX_ANGLE);
   
@@ -1132,19 +1203,15 @@ void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
   
   if (!pointPool || pointCount == 0) return;
   
-  int samplingStep = 1;
-  int targetCount = pointCount;
-  if (pointCount > 4000) {
-    samplingStep = pointCount / 4000 + 1;
-    targetCount = (pointCount + samplingStep - 1) / samplingStep;
-  }
+  // 记录开始分配前的堆内存
+  Serial.printf("[3D] Before allocation: %u bytes free\n", esp_get_free_heap_size());
   
-  worldPoints = new WorldPoint[targetCount];
-  segments = new SegmentRef[targetCount - 1];
+  // 限制 3D 视图使用的点数。3000 点对于 3D 来说已经足够，且能腾出 RAM 用于渲染。
+  int targetCount = (pointCount > MAX_WORLD_POINTS) ? MAX_WORLD_POINTS : pointCount;
   
-  if (!worldPoints || !segments) {
-    Serial.println("[3D] Memory allocation failed!");
-    releaseWorldPoints();
+  worldPoints = new (std::nothrow) WorldPoint[targetCount];
+  if (!worldPoints) {
+    Serial.printf("[3D] Memory allocation failed for %d worldPoints! Free: %u\n", targetCount, esp_get_free_heap_size());
     return;
   }
   
@@ -1158,19 +1225,25 @@ void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
   
   worldPointCount = 0;
   minWorldX = 1e9f; maxWorldX = -1e9f;
-  minWorldY = 1e9f; maxWorldY = -1e9f;
+  minWorldZ = 0, maxWorldZ = 0;
+  // 初始化仪表盘配置
+  // 如果原始点数超过目标，进行均匀采样
+  float sampleRate = (float)pointCount / targetCount;
   
-  for (int i = 0; i < pointCount && worldPointCount < targetCount; i += samplingStep) {
-    float dLon = (pointPool[i].longitude - cachedLon0) * DEG2RAD;
-    float dLat = (pointPool[i].latitude - cachedLat0) * DEG2RAD;
+  for (int i = 0; i < targetCount; i++) {
+    int srcIdx = (int)(i * sampleRate);
+    if (srcIdx >= pointCount) srcIdx = pointCount - 1;
+    
+    float dLon = (pointPool[srcIdx].longitude - cachedLon0) * DEG2RAD;
+    float dLat = (pointPool[srcIdx].latitude - cachedLat0) * DEG2RAD;
     
     float wx = dLon * cosLat0 * EARTH_RADIUS_KM;
     float wy = -dLat * EARTH_RADIUS_KM;
-    float wz = (pointPool[i].altitude - cachedAlt0) * 0.001f * (float)verticalExaggeration;
+    float wz = (pointPool[srcIdx].altitude - cachedAlt0) * 0.001f * (float)verticalExaggeration;
     
-    worldPoints[worldPointCount].x = wx;
-    worldPoints[worldPointCount].y = wy;
-    worldPoints[worldPointCount].z = wz;
+    worldPoints[i].x = wx;
+    worldPoints[i].y = wy;
+    worldPoints[i].z = wz;
     
     if (wx < minWorldX) minWorldX = wx;
     if (wx > maxWorldX) maxWorldX = wx;
@@ -1180,11 +1253,33 @@ void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
     worldPointCount++;
   }
   
+  // 在采样后进行 Douglas-Peucker 进一步精简（可选，因为已经均匀采样了）
+  // simplifyPathDouglasPeucker(worldPoints, worldPointCount, 0.002f);
+  
+  Serial.printf("[3D] Built %d points. After allocation: %u bytes free\n", worldPointCount, esp_get_free_heap_size());
+  
+  // 在构建线段索引之前进行 Douglas-Peucker 简化
+  // 使用 epsilon = 2.0米 (0.002km) 作为默认阈值
+  int originalCount = worldPointCount;
+  simplifyPathDouglasPeucker(worldPoints, worldPointCount, 0.002f);
+  
+  // 计算线段数量
   segmentCount = worldPointCount - 1;
-  for (int i = 0; i < segmentCount; i++) {
-    segments[i].i1 = i;
-    segments[i].i2 = i + 1;
-    segments[i].depth = 0;
+  if (segmentCount > 0) {
+    segments = new (std::nothrow) SegmentRef[segmentCount];
+    if (!segments) {
+      Serial.printf("[3D] Memory allocation failed for %d segments! Free: %u\n", segmentCount, esp_get_free_heap_size());
+      segmentCount = 0; // Allocation failed, so no segments
+      return;
+    }
+    
+    for (int i = 0; i < segmentCount; i++) {
+      segments[i].i1 = i;
+      segments[i].i2 = i + 1;
+      segments[i].depth = 0;
+    }
+  } else {
+    segments = nullptr; // No segments to allocate
   }
   
   cachedPointPool = pointPool;
@@ -1196,7 +1291,7 @@ void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
     float maxExtent = max(worldWidth, worldHeight);
     
     if (maxExtent > 0.001f) {
-      float screenExtent = min(screenWidth, screenHeight) * 0.7f;
+      float screenExtent = min(screenWidth, screenHeight) * 0.9f;
       scaleFactor = screenExtent / maxExtent;
       
       if (scaleFactor < 10.0f) scaleFactor = 10.0f;
@@ -1206,8 +1301,8 @@ void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
     }
   }
   
-  Serial.printf("[3D World] Built %d points from %d original (step=%d)\n", 
-                worldPointCount, pointCount, samplingStep);
+  Serial.printf("[3D World] Built %d points from %d original (DP simplified, removed %d)\n", 
+                worldPointCount, pointCount, originalCount - worldPointCount);
   Serial.printf("[3D World] X: %.3f to %.3f km, Y: %.3f to %.3f km\n",
                 minWorldX, maxWorldX, minWorldY, maxWorldY);
 }
@@ -1216,10 +1311,12 @@ void RenderEngine::releaseWorldPoints() {
   if (worldPoints) {
     delete[] worldPoints;
     worldPoints = nullptr;
+    Serial.println("[3D] worldPoints released");
   }
   if (segments) {
     delete[] segments;
     segments = nullptr;
+    Serial.println("[3D] segments released");
   }
   worldPointCount = 0;
   segmentCount = 0;
@@ -1231,7 +1328,7 @@ void RenderEngine::invalidateWorldPoints() {
 }
 
 // 3D渲染核心方法实现
-void RenderEngine::render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount) {
+void RenderEngine::render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount, const POI* poiPool, int poiCount, bool showPOIs) {
   if (!canvas) return;
   
   if (worldPointCount == 0 || worldPoints == nullptr) {
@@ -1439,6 +1536,50 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
   draw3DGroundProjection(cosP, sinP, cosR, sinR, sinA, cosA, sinG, cosG, minZ, zRange, centerX, centerY);
   
   draw3DVerticalLines(cosP, sinP, cosR, sinR, sinA, cosA, sinG, cosG, minZ, zRange, centerX, centerY);
+  
+  // 绘制 3D 关键点
+  if (showPOIs && poiPool && poiCount > 0) {
+    const float EARTH_RADIUS_KM = 6378.137f;
+    const float DEG2RAD = PI / 180.0f;
+    
+    for (int i = 0; i < poiCount; i++) {
+        float dLon = (poiPool[i].loc.longitude - cachedLon0) * DEG2RAD;
+        float dLat = (poiPool[i].loc.latitude - cachedLat0) * DEG2RAD;
+        
+        float wx = dLon * cosLat0 * EARTH_RADIUS_KM - centerX;
+        float wy = -dLat * EARTH_RADIUS_KM - centerY;
+        float wz = (poiPool[i].loc.altitude - cachedAlt0) * 0.001f * verticalExaggeration;
+        
+        float rx = wx * cosR + wz * sinR;
+        float rz = -wx * sinR + wz * cosR;
+        float ry = wy * cosP - rz * sinP;
+        rz = wy * sinP + rz * cosP;
+        
+        float sx = rx * (float)scaleFactor;
+        float sy = ry * (float)scaleFactor;
+        float sz = rz * (float)scaleFactor;
+        
+        float x2d = (sx * cosG) - (sy * sinG);
+        float y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
+        
+        int screenX = (int)(x2d + screenWidth / 2 + pan3DX);
+        int screenY = (int)(screenHeight / 2 - y2d + pan3DY);
+        
+        if (screenX > 0 && screenX < screenWidth && screenY > 0 && screenY < screenHeight) {
+            // 画绿色小旗帜（三角形）
+            canvas->fillTriangle(screenX, screenY, screenX - 4, screenY - 8, screenX + 4, screenY - 8, TFT_GREEN);
+            canvas->drawLine(screenX, screenY, screenX, screenY - 8, TFT_BLACK);
+            
+            if (poiPool[i].name != "") {
+                canvas->setTextColor(TFT_BLACK);
+                canvas->drawCenterString(poiPool[i].name, screenX, screenY - 20);
+            }
+        }
+    }
+  }
+  
+  // 绘制 3D 当前位置
+  draw3DCurrentLocation(currentLocation);
   
   draw3DUIInfo();
 }
@@ -1657,13 +1798,60 @@ void RenderEngine::draw3DVerticalLines(float cosP, float sinP, float cosR, float
 // 绘制3D当前位置
 void RenderEngine::draw3DCurrentLocation(const Location& currentLocation) {
   if (!currentLocation.isValid) return;
-  
-  // 检查canvas是否已设置
   if (!canvas) return;
   
-  // 计算当前位置的3D坐标并绘制
-  canvas->fillCircle(screenWidth / 2, screenHeight / 2, 5, TFT_RED);
-  canvas->fillCircle(screenWidth / 2, screenHeight / 2, 2, TFT_WHITE);
+  // 计算旋转中心
+  float centerX = 0.0f, centerY = 0.0f;
+  if (useCenterRotation) {
+    centerX = (minWorldX + maxWorldX) / 2.0f;
+    centerY = (minWorldY + maxWorldY) / 2.0f;
+  }
+  
+  float cosP = cosf((float)pitch);
+  float sinP = sinf((float)pitch);
+  float cosR = cosf((float)roll);
+  float sinR = sinf((float)roll);
+  
+  float alpha = 19.47f * PI / 180.0f;
+  float gamma = 20.7f * PI / 180.0f;
+  float sinA = sinf(alpha);
+  float cosA = cosf(alpha);
+  float sinG = sinf(gamma);
+  float cosG = cosf(gamma);
+  
+  const float EARTH_RADIUS_KM = 6378.137f;
+  const float DEG2RAD = PI / 180.0f;
+  
+  // 转换为公里并应用中心偏移
+  float dLon = (currentLocation.longitude - cachedLon0) * DEG2RAD;
+  float dLat = (currentLocation.latitude - cachedLat0) * DEG2RAD;
+  
+  float wx = dLon * cosLat0 * EARTH_RADIUS_KM - centerX;
+  float wy = -dLat * EARTH_RADIUS_KM - centerY;
+  float wz = (currentLocation.altitude - cachedAlt0) * 0.001f * verticalExaggeration;
+  
+  // 3D 旋转变换
+  float rx = wx * cosR + wz * sinR;
+  float rz = -wx * sinR + wz * cosR;
+  float ry = wy * cosP - rz * sinP;
+  rz = wy * sinP + rz * cosP;
+  
+  // 应用投影变换
+  float sx = rx * (float)scaleFactor;
+  float sy = ry * (float)scaleFactor;
+  float sz = rz * (float)scaleFactor;
+  
+  float x2d = (sx * cosG) - (sy * sinG);
+  float y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
+  
+  int screenX = (int)(x2d + screenWidth / 2 + pan3DX);
+  int screenY = (int)(screenHeight / 2 - y2d + pan3DY);
+  
+  // 绘制蓝色标记
+  if (screenX > -10 && screenX < screenWidth + 10 && screenY > -10 && screenY < screenHeight + 10) {
+      canvas->fillCircle(screenX, screenY, 4, TFT_BLUE);
+      canvas->fillCircle(screenX, screenY, 2, TFT_WHITE);
+  }
 }
 
 // 绘制3D UI信息
@@ -1822,6 +2010,26 @@ bool RenderEngine::findClosestSegment(const Location* pointPool, int pointCount,
   
   distance = minDistance;
   return true;
+}
+
+void RenderEngine::drawPOIs(const POI* poiPool, int poiCount, bool showNames) {
+  if (!poiPool || poiCount <= 0 || !canvas) return;
+  
+  for (int i = 0; i < poiCount; i++) {
+    int px, py;
+    latLngToScreen(poiPool[i].loc.latitude, poiPool[i].loc.longitude, px, py);
+    {
+        // 画绿色小旗帜
+        canvas->fillTriangle(px, py, px - 4, py - 8, px + 4, py - 8, TFT_GREEN);
+        canvas->drawLine(px, py, px, py - 8, TFT_BLACK);
+        
+        if (showNames && poiPool[i].name != "") {
+             canvas->setFont(&fonts::efontCN_12);
+             canvas->setTextColor(TFT_BLACK);
+             canvas->drawCenterString(poiPool[i].name, px, py - 18);
+        }
+    }
+  }
 }
 
 void RenderEngine::drawElevationChart(const std::vector<Location>& routePoints, const Location& currentLocation, const Location* pointPool, int pointCount) {
@@ -2015,4 +2223,68 @@ void RenderEngine::autoPanToCurrentLocation() {
 
 int RenderEngine::getAutoPanMode() {
   return autoPanMode;
+}
+
+float RenderEngine::pointLineDistance(WorldPoint p, WorldPoint a, WorldPoint b) {
+  float dx = b.x - a.x;
+  float dy = b.y - a.y;
+  if (dx == 0 && dy == 0) {
+    return sqrtf((p.x - a.x) * (p.x - a.x) + (p.y - a.y) * (p.y - a.y));
+  }
+  
+  // 点到直线的距离公式：d = |(y2-y1)x0 - (x2-x1)y0 + x2y1 - y2x1| / sqrt((y2-y1)^2 + (x2-x1)^2)
+  float area = fabsf(dy * p.x - dx * p.y + b.x * a.y - b.y * a.x);
+  return area / sqrtf(dx * dx + dy * dy);
+}
+
+void RenderEngine::simplifyPathDouglasPeucker(WorldPoint* points, int& count, float epsilon) {
+  if (count <= 2) return;
+  
+  // 标记保留点
+  bool* keep = new (std::nothrow) bool[count];
+  if (!keep) return;
+  for (int i = 0; i < count; i++) keep[i] = false;
+  
+  keep[0] = true;
+  keep[count - 1] = true;
+  
+  // 非递归栈使用 std::vector
+  std::vector<Range> stack;
+  stack.push_back({0, count - 1});
+  
+  while (!stack.empty()) {
+    Range range = stack.back();
+    stack.pop_back();
+    
+    int start = range.start;
+    int end = range.end;
+    if (end - start <= 1) continue;
+    
+    float maxDist = 0;
+    int index = -1;
+    
+    for (int i = start + 1; i < end; i++) {
+        float dist = pointLineDistance(points[i], points[start], points[end]);
+        if (dist > maxDist) {
+            maxDist = dist;
+            index = i;
+        }
+    }
+    
+    if (maxDist > epsilon && index != -1) {
+      keep[index] = true;
+      stack.push_back({start, index});
+      stack.push_back({index, end});
+    }
+  }
+  
+  // 重新映射点数组（原地压缩）
+  int newCount = 0;
+  for (int i = 0; i < count; i++) {
+    if (keep[i]) {
+      points[newCount++] = points[i];
+    }
+  }
+  count = newCount;
+  delete[] keep;
 }

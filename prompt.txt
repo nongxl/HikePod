@@ -1,0 +1,52 @@
+Implement Lightweight Chinese Font System
+目标
+
+在 ESP32 上实现低内存中文显示：
+
+支持常用汉字（约 300~500 个）
+
+字体编译进固件（.h）
+
+不依赖 SD 卡
+
+数据结构
+struct Glyph {
+    uint16_t unicode;
+    const uint8_t* bitmap;
+};
+字体参数
+#define FONT_WIDTH 16
+#define FONT_HEIGHT 16
+#define FONT_BYTES_PER_CHAR 32
+字库数组
+extern const Glyph fontTable[];
+extern const int fontCount;
+功能实现
+1️⃣ UTF-8 解码
+
+实现：
+
+uint16_t utf8ToUnicode(const char* str);
+2️⃣ 查找字形
+const Glyph* findGlyph(uint16_t unicode);
+
+（可用线性查找或二分）
+
+3️⃣ 绘制字符
+void drawChar(int x, int y, const Glyph* glyph);
+
+逐 bit 绘制：
+
+1 → 画点
+
+0 → 跳过
+
+4️⃣ 绘制字符串
+void drawString(int x, int y, const char* utf8Str);
+性能要求
+
+不使用动态分配
+
+使用 PROGMEM 存储字体
+
+支持 500 字以内

@@ -4,6 +4,7 @@
 #include <vector>
 #include "GNSSModule.h"
 #include <M5GFX.h>
+#include "KMLParser.h"
 
 // 缩放级别定义：每个级别对应屏幕宽度覆盖的真实距离（米）
 enum MapZoom {
@@ -17,7 +18,9 @@ enum MapZoom {
   ZOOM_1KM,
   ZOOM_5KM,
   ZOOM_10KM,
-  ZOOM_25KM
+  ZOOM_25KM,
+  ZOOM_50KM,
+  ZOOM_100KM
 };
 
 // 视图模式定义
@@ -58,10 +61,13 @@ public:
   void zoomAroundPoint(float lat, float lng, int newZoomLevel);
   
   // 渲染整个界面
-  void render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0);
+  void render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0, const POI* poiPool = nullptr, int poiCount = 0, bool showPOIs = false);
   
   // 坐标转换：经纬度到屏幕坐标
   void latLngToScreen(float lat, float lng, int& x, int& y);
+  
+  // 坐标转换：屏幕坐标到经纬度
+  void screenToLatLng(int x, int y, float& lat, float& lng);
   
   // 设置GNSS模块引用
   void setGNSSModule(GNSSModule* gnssModule);
@@ -142,9 +148,11 @@ public:
   void buildWorldPoints(const Location* pointPool, int pointCount);
   void releaseWorldPoints();
   void invalidateWorldPoints();  // 标记世界坐标需要重新构建
+  void autoFitToRoute();       // 自动缩放并居中路径
   
   // 3D渲染核心方法
-  void render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0);
+  void render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0, const POI* poiPool = nullptr, int poiCount = 0, bool showPOIs = false);
+  
   
 private:
   int screenWidth;
@@ -205,6 +213,7 @@ private:
   int trackingDotCounter;
   unsigned long lastDotUpdateTime;
   
+  
   // 3D渲染相关
   ViewMode viewMode;         // 当前视图模式
   float verticalExaggeration; // 垂直放大系数
@@ -249,6 +258,13 @@ private:
     uint16_t i2;     // 终点索引
     float depth;     // 平均深度
   };
+  struct Range {
+    int start;
+    int end;
+  };
+  
+  // 进一步降低 3D 视图点数上限，确保线段索引数组（segments）也有空间分配。
+  static const int MAX_WORLD_POINTS = 2000;
   
   // 动态分配的世界坐标数组
   WorldPoint* worldPoints;
@@ -260,7 +276,7 @@ private:
   
   // 缓存的常量（加载时计算一次）
   float cosLat0;           // cos(lat0)
-  float minWorldX, maxWorldX, minWorldY, maxWorldY;  // 世界坐标范围
+  float minWorldX, maxWorldX, minWorldY, maxWorldY, minWorldZ, maxWorldZ;  // 世界坐标范围
   
   // 缓存原始数据引用
   const Location* cachedPointPool;
@@ -313,12 +329,21 @@ private:
   // 找到最近的路线线段并计算进度
   bool findClosestSegment(const Location* pointPool, int pointCount, const Location& currentLocation, double& progress, double& distance);
   
+  // 绘制 2D 关键点
+  void drawPOIs(const POI* poiPool, int poiCount, bool showNames);
+  
   // 3D渲染私有方法
   void draw3DCurrentLocation(const Location& currentLocation);
   void draw3DUIInfo();
   void draw3DGroundPlane(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG);
   void draw3DVerticalLines(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG, float minZ, float zRange, float centerX, float centerY);
   void draw3DGroundProjection(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG, float minZ, float zRange, float centerX, float centerY);
+  
+  // Douglas-Peucker 路径简化（非递归）
+  void simplifyPathDouglasPeucker(WorldPoint* points, int& count, float epsilon);
+  
+  // 计算点到直线的距离（2D）
+  float pointLineDistance(WorldPoint p, WorldPoint a, WorldPoint b);
 };
 
 #endif // RENDER_ENGINE_H

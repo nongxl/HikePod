@@ -98,7 +98,7 @@ void InteractionManager::handleKeyboardInput(bool keyboardChanged, bool keyboard
   static unsigned long lastKeyPressTime = 0;
   static unsigned long lastRepeatTime = 0;
   const unsigned long DEBOUNCE_DELAY = 100; // 保持防抖延迟
-  const unsigned long REPEAT_DELAY = 60; // 减少长按重复触发延迟，从100ms改为60ms
+  const unsigned long REPEAT_DELAY = 80; // 增加长按重复触发延迟，从60ms改为80ms，否则容易误触
   
   // 每次调用先重置标志
   zoomChanged = false;
@@ -151,14 +151,14 @@ void InteractionManager::handleKeyboardInput(bool keyboardChanged, bool keyboard
       
       // 处理缩放操作
       if (plusPressed) {
-        if (targetZoomLevel > 0) {  // 支持最多11个缩放级别（0-10）
+        if (targetZoomLevel > 0) {  // 支持最多13个缩放级别（0-12）
           targetZoomLevel--;  // 减小缩放级别 = 放大地图
           zoomChanged = true;
           isZoomAnimating = true;
           //Serial.printf("[DEBUG] Plus/Equal key pressed, targetZoomLevel=%d\n", targetZoomLevel);
         }
       } else if (minusPressed) {
-        if (targetZoomLevel < 10) {
+        if (targetZoomLevel < 12) {
           targetZoomLevel++;  // 增加缩放级别 = 缩小地图
           zoomChanged = true;
           isZoomAnimating = true;
