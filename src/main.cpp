@@ -1,3 +1,15 @@
+/**
+ * @file main.cpp
+ * @brief HikePod - Outdoor Navigation for M5Stack Cardputer
+ * 
+ * Note: The "GPS Info" display logic and satellite calculation routines 
+ * are ported/derived from the "Cardputer-GPS-Info" project by alcor55.
+ * Original project: https://github.com/alcor55/Cardputer-GPS-Info
+ * 
+ * @author HikePod Contributors
+ * @license MIT
+ */
+
 #include <M5Cardputer.h>
 #include <TinyGPSPlus.h>
 #include <SD.h>

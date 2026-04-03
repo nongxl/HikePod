@@ -1,0 +1,525 @@
+- generic [ref=e2]:
+  - region
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - banner [ref=e6]:
+      - heading "Navigation Menu" [level=2] [ref=e7]
+      - generic [ref=e9]:
+        - button "Toggle navigation" [ref=e11] [cursor=pointer]
+        - link "Homepage" [ref=e17] [cursor=pointer]:
+          - /url: /
+          - img [ref=e18]
+        - generic [ref=e20]:
+          - link "Sign in" [ref=e21] [cursor=pointer]:
+            - /url: /login?return_to=https%3A%2F%2Fgithub.com%2Falcor55%2FCardputer-GPS-Info
+          - button "Appearance settings" [ref=e24] [cursor=pointer]:
+            - img
+  - main [ref=e28]:
+    - generic [ref=e29]:
+      - generic [ref=e30]:
+        - generic [ref=e32]:
+          - img [ref=e33]
+          - link "alcor55" [ref=e36] [cursor=pointer]:
+            - /url: /alcor55
+          - generic [ref=e37]: /
+          - strong [ref=e38]:
+            - link "Cardputer-GPS-Info" [ref=e39] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info
+          - generic [ref=e40]: Public
+        - generic [ref=e41]:
+          - list:
+            - listitem [ref=e42]:
+              - link "You must be signed in to change notification settings" [ref=e43] [cursor=pointer]:
+                - /url: /login?return_to=%2Falcor55%2FCardputer-GPS-Info
+                - img [ref=e44]
+                - text: Notifications
+            - listitem [ref=e46]:
+              - link "Fork 2" [ref=e47] [cursor=pointer]:
+                - /url: /login?return_to=%2Falcor55%2FCardputer-GPS-Info
+                - img [ref=e48]
+                - text: Fork
+                - generic "2" [ref=e50]
+            - listitem [ref=e51]:
+              - link "You must be signed in to star a repository" [ref=e53] [cursor=pointer]:
+                - /url: /login?return_to=%2Falcor55%2FCardputer-GPS-Info
+                - img [ref=e54]
+                - text: Star
+                - generic "9 users starred this repository" [ref=e56]: "9"
+      - navigation "Repository" [ref=e57]:
+        - list [ref=e58]:
+          - listitem [ref=e59]:
+            - link "Code" [ref=e60] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info
+              - img [ref=e61]
+              - generic [ref=e63]: Code
+          - listitem [ref=e64]:
+            - link "Issues" [ref=e65] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/issues
+              - img [ref=e66]
+              - generic [ref=e69]: Issues
+          - listitem [ref=e70]:
+            - link "Pull requests" [ref=e71] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/pulls
+              - img [ref=e72]
+              - generic [ref=e74]: Pull requests
+          - listitem [ref=e75]:
+            - link "Actions" [ref=e76] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/actions
+              - img [ref=e77]
+              - generic [ref=e79]: Actions
+          - listitem [ref=e80]:
+            - link "Projects" [ref=e81] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/projects
+              - img [ref=e82]
+              - generic [ref=e84]: Projects
+          - listitem [ref=e85]:
+            - link "Security and quality" [ref=e86] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/security
+              - img [ref=e87]
+              - generic [ref=e89]: Security and quality
+          - listitem [ref=e90]
+        - button "Additional navigation options" [ref=e94] [cursor=pointer]:
+          - img
+    - generic [ref=e107]:
+      - heading "alcor55/Cardputer-GPS-Info" [level=1] [ref=e109]
+      - generic [ref=e110]:
+        - generic [ref=e113]:
+          - generic [ref=e114]:
+            - generic [ref=e115]:
+              - button "main branch" [ref=e117] [cursor=pointer]:
+                - generic [ref=e118]:
+                  - generic [ref=e120]:
+                    - img [ref=e122]
+                    - generic [ref=e125]: main
+                  - generic:
+                    - img
+              - generic [ref=e126]:
+                - link "Go to Branches page" [ref=e127] [cursor=pointer]:
+                  - /url: /alcor55/Cardputer-GPS-Info/branches
+                  - img [ref=e128]
+                - link "Go to Tags page" [ref=e130] [cursor=pointer]:
+                  - /url: /alcor55/Cardputer-GPS-Info/tags
+                  - img [ref=e131]
+            - generic [ref=e133]:
+              - button "Go to file" [ref=e136] [cursor=pointer]:
+                - generic [ref=e138]: Go to file
+              - button "Code" [ref=e139] [cursor=pointer]:
+                - generic [ref=e140]:
+                  - generic:
+                    - img
+                  - generic [ref=e141]: Code
+                  - generic:
+                    - img
+          - generic [ref=e142]:
+            - generic [ref=e143]:
+              - heading "Folders and files" [level=2] [ref=e144]
+              - table "Folders and files" [ref=e145]:
+                - rowgroup:
+                  - row "Name Last commit message Last commit date":
+                    - columnheader "Name"
+                    - columnheader "Last commit message":
+                      - generic "Last commit message"
+                    - columnheader "Last commit date":
+                      - generic "Last commit date"
+                - rowgroup [ref=e146]:
+                  - 'row "Latest commit alcor55 commits by alcor55 v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,… Open commit details Commit 65534a0 · Nov 12, 20255 months ago History View commit history for this file." [ref=e147]':
+                    - 'cell "Latest commit alcor55 commits by alcor55 v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,… Open commit details Commit 65534a0 · Nov 12, 20255 months ago History View commit history for this file." [ref=e148]':
+                      - generic [ref=e149]:
+                        - heading "Latest commit" [level=2] [ref=e150]
+                        - generic [ref=e151]:
+                          - generic [ref=e153]:
+                            - link "alcor55" [ref=e154] [cursor=pointer]:
+                              - /url: /alcor55
+                              - img "alcor55" [ref=e155]
+                            - link "commits by alcor55" [ref=e156] [cursor=pointer]:
+                              - /url: /alcor55/Cardputer-GPS-Info/commits?author=alcor55
+                              - text: alcor55
+                          - generic [ref=e157]:
+                            - 'link "v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,…" [ref=e160] [cursor=pointer]':
+                              - /url: /alcor55/Cardputer-GPS-Info/commit/65534a0708643cef0d9cc9ba6aff30558f65c9ee
+                            - button "Open commit details" [ref=e161] [cursor=pointer]:
+                              - img [ref=e162]
+                        - generic [ref=e164]:
+                          - generic [ref=e166]:
+                            - link "Commit 65534a0" [ref=e167] [cursor=pointer]:
+                              - /url: /alcor55/Cardputer-GPS-Info/commit/65534a0708643cef0d9cc9ba6aff30558f65c9ee
+                              - text: 65534a0
+                            - text: ·
+                            - generic "Nov 12, 2025, 9:14 PM GMT+8" [ref=e168]: Nov 12, 20255 months ago
+                          - generic [ref=e169]:
+                            - heading "History" [level=2] [ref=e170]
+                            - link "View commit history for this file." [ref=e172] [cursor=pointer]:
+                              - /url: /alcor55/Cardputer-GPS-Info/commits/main/
+                              - generic [ref=e173]:
+                                - generic:
+                                  - img
+                  - 'row ".gitignore, (File) v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,… Nov 12, 20255 months ago" [ref=e174]':
+                    - cell ".gitignore, (File)" [ref=e175]:
+                      - generic [ref=e176]:
+                        - img [ref=e177]
+                        - link ".gitignore, (File)" [ref=e182] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/.gitignore
+                          - text: .gitignore
+                    - 'cell "v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,…" [ref=e183]':
+                      - 'link "v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,…" [ref=e186] [cursor=pointer]':
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/65534a0708643cef0d9cc9ba6aff30558f65c9ee
+                    - cell "Nov 12, 20255 months ago" [ref=e187]:
+                      - generic [ref=e188]: Nov 12, 20255 months ago
+                  - row "1.jpeg, (File) Add screenshots. Nov 10, 20255 months ago" [ref=e189]:
+                    - cell "1.jpeg, (File)" [ref=e190]:
+                      - generic [ref=e191]:
+                        - img [ref=e192]
+                        - link "1.jpeg, (File)" [ref=e197] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/1.jpeg
+                          - text: 1.jpeg
+                    - cell "Add screenshots." [ref=e198]:
+                      - link "Add screenshots." [ref=e201] [cursor=pointer]:
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/ae3aece61089390622a2cb5d483c460d3d496842
+                    - cell "Nov 10, 20255 months ago" [ref=e202]:
+                      - generic [ref=e203]: Nov 10, 20255 months ago
+                  - row "2.jpeg, (File) Add screenshots. Nov 10, 20255 months ago" [ref=e204]:
+                    - cell "2.jpeg, (File)" [ref=e205]:
+                      - generic [ref=e206]:
+                        - img [ref=e207]
+                        - link "2.jpeg, (File)" [ref=e212] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/2.jpeg
+                          - text: 2.jpeg
+                    - cell "Add screenshots." [ref=e213]:
+                      - link "Add screenshots." [ref=e216] [cursor=pointer]:
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/ae3aece61089390622a2cb5d483c460d3d496842
+                    - cell "Nov 10, 20255 months ago" [ref=e217]:
+                      - generic [ref=e218]: Nov 10, 20255 months ago
+                  - row "3.jpeg, (File) Add screenshots. Nov 10, 20255 months ago" [ref=e219]:
+                    - cell "3.jpeg, (File)" [ref=e220]:
+                      - generic [ref=e221]:
+                        - img [ref=e222]
+                        - link "3.jpeg, (File)" [ref=e227] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/3.jpeg
+                          - text: 3.jpeg
+                    - cell "Add screenshots." [ref=e228]:
+                      - link "Add screenshots." [ref=e231] [cursor=pointer]:
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/ae3aece61089390622a2cb5d483c460d3d496842
+                    - cell "Nov 10, 20255 months ago" [ref=e232]:
+                      - generic [ref=e233]: Nov 10, 20255 months ago
+                  - row "4.jpeg, (File) Add screenshots. Nov 10, 20255 months ago" [ref=e234]:
+                    - cell "4.jpeg, (File)" [ref=e235]:
+                      - generic [ref=e236]:
+                        - img [ref=e237]
+                        - link "4.jpeg, (File)" [ref=e242] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/4.jpeg
+                          - text: 4.jpeg
+                    - cell "Add screenshots." [ref=e243]:
+                      - link "Add screenshots." [ref=e246] [cursor=pointer]:
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/ae3aece61089390622a2cb5d483c460d3d496842
+                    - cell "Nov 10, 20255 months ago" [ref=e247]:
+                      - generic [ref=e248]: Nov 10, 20255 months ago
+                  - row "5.jpeg, (File) Add screenshots. Nov 10, 20255 months ago" [ref=e249]:
+                    - cell "5.jpeg, (File)" [ref=e250]:
+                      - generic [ref=e251]:
+                        - img [ref=e252]
+                        - link "5.jpeg, (File)" [ref=e257] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/5.jpeg
+                          - text: 5.jpeg
+                    - cell "Add screenshots." [ref=e258]:
+                      - link "Add screenshots." [ref=e261] [cursor=pointer]:
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/ae3aece61089390622a2cb5d483c460d3d496842
+                    - cell "Nov 10, 20255 months ago" [ref=e262]:
+                      - generic [ref=e263]: Nov 10, 20255 months ago
+                  - row "6.jpeg, (File) Add screenshots. Nov 10, 20255 months ago" [ref=e264]:
+                    - cell "6.jpeg, (File)" [ref=e265]:
+                      - generic [ref=e266]:
+                        - img [ref=e267]
+                        - link "6.jpeg, (File)" [ref=e272] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/6.jpeg
+                          - text: 6.jpeg
+                    - cell "Add screenshots." [ref=e273]:
+                      - link "Add screenshots." [ref=e276] [cursor=pointer]:
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/ae3aece61089390622a2cb5d483c460d3d496842
+                    - cell "Nov 10, 20255 months ago" [ref=e277]:
+                      - generic [ref=e278]: Nov 10, 20255 months ago
+                  - row "7.png, (File) Add screenshots. Nov 10, 20255 months ago" [ref=e279]:
+                    - cell "7.png, (File)" [ref=e280]:
+                      - generic [ref=e281]:
+                        - img [ref=e282]
+                        - link "7.png, (File)" [ref=e287] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/7.png
+                          - text: 7.png
+                    - cell "Add screenshots." [ref=e288]:
+                      - link "Add screenshots." [ref=e291] [cursor=pointer]:
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/ae3aece61089390622a2cb5d483c460d3d496842
+                    - cell "Nov 10, 20255 months ago" [ref=e292]:
+                      - generic [ref=e293]: Nov 10, 20255 months ago
+                  - 'row "Cardputer_GPS_Info.ino, (File) v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,… Nov 12, 20255 months ago" [ref=e294]':
+                    - cell "Cardputer_GPS_Info.ino, (File)" [ref=e295]:
+                      - generic [ref=e296]:
+                        - img [ref=e297]
+                        - link "Cardputer_GPS_Info.ino, (File)" [ref=e302] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/Cardputer_GPS_Info.ino
+                          - text: Cardputer_GPS_Info.ino
+                    - 'cell "v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,…" [ref=e303]':
+                      - 'link "v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,…" [ref=e306] [cursor=pointer]':
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/65534a0708643cef0d9cc9ba6aff30558f65c9ee
+                    - cell "Nov 12, 20255 months ago" [ref=e307]:
+                      - generic [ref=e308]: Nov 12, 20255 months ago
+                  - 'row "README.md, (File) v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,… Nov 12, 20255 months ago" [ref=e309]':
+                    - cell "README.md, (File)" [ref=e310]:
+                      - generic [ref=e311]:
+                        - img [ref=e312]
+                        - link "README.md, (File)" [ref=e317] [cursor=pointer]:
+                          - /url: /alcor55/Cardputer-GPS-Info/blob/main/README.md
+                          - text: README.md
+                    - 'cell "v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,…" [ref=e318]':
+                      - 'link "v1.1.0: Added microSD config support for GPS RX/TX pins and baudrate,…" [ref=e321] [cursor=pointer]':
+                        - /url: /alcor55/Cardputer-GPS-Info/commit/65534a0708643cef0d9cc9ba6aff30558f65c9ee
+                    - cell "Nov 12, 20255 months ago" [ref=e322]:
+                      - generic [ref=e323]: Nov 12, 20255 months ago
+            - generic [ref=e325]:
+              - generic [ref=e326]:
+                - heading "Repository files navigation" [level=2] [ref=e327]
+                - navigation "Repository files" [ref=e328]:
+                  - list [ref=e329]:
+                    - listitem [ref=e330]:
+                      - link "README" [ref=e331] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e333]
+                        - generic [ref=e335]: README
+                - button "Outline" [ref=e336] [cursor=pointer]:
+                  - img [ref=e337]
+              - article [ref=e340]:
+                - generic [ref=e341]:
+                  - heading "Cardputer GPS Info" [level=1] [ref=e342]
+                  - 'link "Permalink: Cardputer GPS Info" [ref=e343] [cursor=pointer]':
+                    - /url: "#cardputer-gps-info"
+                    - img [ref=e344]
+                - paragraph [ref=e346]:
+                  - text: Cardputer GPS Info is a lightweight GPS information tool for the M5Stack Cardputer.
+                  - text: It reads GPS data via UART and displays location, speed, course, satellite visibility, and sky plots directly on the Cardputer screen.
+                - paragraph [ref=e347]:
+                  - link "Screenshot 1" [ref=e348] [cursor=pointer]:
+                    - /url: https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/1.jpeg
+                    - img "Screenshot 1"
+                - generic [ref=e349]:
+                  - heading "Changelog" [level=2] [ref=e350]
+                  - 'link "Permalink: Changelog" [ref=e351] [cursor=pointer]':
+                    - /url: "#changelog"
+                    - img [ref=e352]
+                - paragraph [ref=e354]: 1.0.0 - First release. 1.1.0 - Added configuration file support on microSD (cpGpsInfo.conf) to store GPS RX/TX pins and baudrate. - Added ability to modify GPS baudrate. - Fixed minor bugs. - Added GPS error state (on,off,err).
+                - generic [ref=e355]:
+                  - heading "ToDo" [level=2] [ref=e356]
+                  - 'link "Permalink: ToDo" [ref=e357] [cursor=pointer]':
+                    - /url: "#todo"
+                    - img [ref=e358]
+                - list [ref=e360]:
+                  - listitem [ref=e361]: Improve gps error handling.
+                  - listitem [ref=e362]: Add a reference popup with pin and baurare for the most used gps models.
+                - generic [ref=e363]:
+                  - heading "Features" [level=2] [ref=e364]
+                  - 'link "Permalink: Features" [ref=e365] [cursor=pointer]':
+                    - /url: "#features"
+                    - img [ref=e366]
+                - list [ref=e368]:
+                  - listitem [ref=e369]: "Display GPS data: Latitude, Longitude, Altitude, Speed, Course, Date, Time, HDOP"
+                  - listitem [ref=e370]: Track all satellites ever seen, currently visible, and those used in the fix
+                  - listitem [ref=e371]:
+                    - text: "Sky plot of satellites with color-coded status:"
+                    - list [ref=e372]:
+                      - listitem [ref=e373]: "Green: used in fix"
+                      - listitem [ref=e374]: "Yellow: visible"
+                      - listitem [ref=e375]: "Red: not used"
+                  - listitem [ref=e376]: Optionally show satellite ID and system on the plot
+                - paragraph [ref=e377]:
+                  - link "Screenshot 1" [ref=e378] [cursor=pointer]:
+                    - /url: https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/6.jpeg
+                    - img "Screenshot 1"
+                - list [ref=e379]:
+                  - listitem [ref=e380]:
+                    - text: "Keyboard control:"
+                    - list [ref=e381]:
+                      - listitem [ref=e382]:
+                        - code [ref=e383]: "[s]"
+                        - text: Start/Stop GPS serial
+                      - listitem [ref=e384]:
+                        - code [ref=e385]: "[c]"
+                        - text: Configuration menu
+                      - listitem [ref=e386]:
+                        - code [ref=e387]: "[h]"
+                        - text: Help menu
+                      - listitem [ref=e388]:
+                        - code [ref=e389]: "[l]"
+                        - text: Print satellite list to USB serial
+                      - listitem [ref=e390]:
+                        - code [ref=e391]: "[n]"
+                        - text: Print NMEA sentences to USB serial
+                      - listitem [ref=e392]:
+                        - code [ref=e393]: "[p]"
+                        - text: Show/hide satellite ID on sky plot
+                      - listitem [ref=e394]:
+                        - code [ref=e395]: "[o]"
+                        - text: Show/hide system on sky plot
+                - paragraph [ref=e396]:
+                  - link "Screenshot 2" [ref=e397] [cursor=pointer]:
+                    - /url: https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/2.jpeg
+                    - img "Screenshot 2"
+                - paragraph [ref=e398]:
+                  - link "Screenshot 3" [ref=e399] [cursor=pointer]:
+                    - /url: https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/3.jpeg
+                    - img "Screenshot 3"
+                - generic [ref=e400]:
+                  - heading "Hardware" [level=2] [ref=e401]
+                  - 'link "Permalink: Hardware" [ref=e402] [cursor=pointer]':
+                    - /url: "#hardware"
+                    - img [ref=e403]
+                - list [ref=e405]:
+                  - listitem [ref=e406]: M5Stack Cardputer (1, 1.1, ADV)
+                  - listitem [ref=e407]: GPS module connected to configurable TX/RX pins (configurables[c] key)
+                - paragraph [ref=e408]:
+                  - link "Screenshot 4" [ref=e409] [cursor=pointer]:
+                    - /url: https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/4.jpeg
+                    - img "Screenshot 4"
+                - generic [ref=e410]:
+                  - heading "NMEA sentences to USB serial [n]" [level=2] [ref=e411]:
+                    - text: NMEA sentences to USB serial
+                    - code [ref=e412]: "[n]"
+                  - 'link "Permalink: NMEA sentences to USB serial [n]" [ref=e413] [cursor=pointer]':
+                    - /url: "#nmea-sentences-to-usb-serial-n"
+                    - img [ref=e414]
+                - paragraph [ref=e416]: If you wat to share the cardputer gps data via serial to another software now you can! Press n, with the cardputer connected via usb, open your nmea software, select the port, enjoy!
+                - paragraph [ref=e417]:
+                  - link "Screenshot 5" [ref=e418] [cursor=pointer]:
+                    - /url: https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/5.jpeg
+                    - img "Screenshot 5"
+                - generic [ref=e419]:
+                  - heading "Print satellite list to USB serial [l]" [level=2] [ref=e420]:
+                    - text: Print satellite list to USB serial
+                    - code [ref=e421]: "[l]"
+                  - 'link "Permalink: Print satellite list to USB serial [l]" [ref=e422] [cursor=pointer]':
+                    - /url: "#print-satellite-list-to-usb-serial-l"
+                    - img [ref=e423]
+                - paragraph [ref=e425]:
+                  - link "Screenshot 7" [ref=e426] [cursor=pointer]:
+                    - /url: https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/7.png
+                    - img "Screenshot 7"
+        - generic [ref=e430]:
+          - generic [ref=e433]:
+            - heading "About" [level=2] [ref=e434]
+            - paragraph [ref=e435]: Firmware that displays a lot of real-time GPS information on the M5Stack Cardputer.
+            - heading "Topics" [level=3] [ref=e436]
+            - generic [ref=e438]:
+              - link "gps" [ref=e439] [cursor=pointer]:
+                - /url: /topics/gps
+              - link "m5stack" [ref=e440] [cursor=pointer]:
+                - /url: /topics/m5stack
+              - link "nmea0183" [ref=e441] [cursor=pointer]:
+                - /url: /topics/nmea0183
+              - link "cardputer" [ref=e442] [cursor=pointer]:
+                - /url: /topics/cardputer
+            - heading "Resources" [level=3] [ref=e443]
+            - link "Readme" [ref=e445] [cursor=pointer]:
+              - /url: "#readme-ov-file"
+              - img [ref=e446]
+              - text: Readme
+            - link "Activity" [ref=e449] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/activity
+              - img [ref=e450]
+              - text: Activity
+            - heading "Stars" [level=3] [ref=e452]
+            - link "9 stars" [ref=e454] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/stargazers
+              - img [ref=e455]
+              - strong [ref=e457]: "9"
+              - text: stars
+            - heading "Watchers" [level=3] [ref=e458]
+            - link "0 watching" [ref=e460] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/watchers
+              - img [ref=e461]
+              - strong [ref=e463]: "0"
+              - text: watching
+            - heading "Forks" [level=3] [ref=e464]
+            - link "2 forks" [ref=e466] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/forks
+              - img [ref=e467]
+              - strong [ref=e469]: "2"
+              - text: forks
+            - link "Report repository" [ref=e471] [cursor=pointer]:
+              - /url: /contact/report-content?content_url=https%3A%2F%2Fgithub.com%2Falcor55%2FCardputer-GPS-Info&report=alcor55+%28user%29
+          - generic [ref=e473]:
+            - heading "Releases 2" [level=2] [ref=e474]:
+              - link "Releases 2" [ref=e475] [cursor=pointer]:
+                - /url: /alcor55/Cardputer-GPS-Info/releases
+                - text: Releases
+                - generic "2" [ref=e476]
+            - link "Cardputer GPS Info v1.1 Latest Nov 12, 2025on Nov 12, 2025" [ref=e477] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/releases/tag/v1.1.0
+              - img [ref=e478]
+              - generic [ref=e480]:
+                - generic [ref=e481]:
+                  - generic [ref=e482]: Cardputer GPS Info v1.1
+                  - 'generic "Label: Latest" [ref=e483]': Latest
+                - generic [ref=e484]: Nov 12, 2025on Nov 12, 2025
+            - link "+ 1 release" [ref=e486] [cursor=pointer]:
+              - /url: /alcor55/Cardputer-GPS-Info/releases
+          - generic [ref=e488]:
+            - heading "Packages" [level=2] [ref=e489]:
+              - link "Packages" [ref=e490] [cursor=pointer]:
+                - /url: /users/alcor55/packages?repo_name=Cardputer-GPS-Info
+            - generic [ref=e491]: No packages published
+          - generic [ref=e493]:
+            - heading "Contributors 1" [level=2] [ref=e494]:
+              - link "Contributors 1" [ref=e495] [cursor=pointer]:
+                - /url: /alcor55/Cardputer-GPS-Info/graphs/contributors
+                - text: Contributors
+                - generic "1" [ref=e496]
+            - list [ref=e497]:
+              - listitem [ref=e498]:
+                - link "@alcor55" [ref=e499] [cursor=pointer]:
+                  - /url: https://github.com/alcor55
+                  - img "@alcor55" [ref=e500]
+                - link "alcor55" [ref=e502] [cursor=pointer]:
+                  - /url: https://github.com/alcor55
+                  - strong [ref=e503]: alcor55
+          - generic [ref=e505]:
+            - heading "Languages" [level=2] [ref=e506]
+            - list [ref=e510]:
+              - listitem [ref=e511]:
+                - link "C++ 100.0%" [ref=e512] [cursor=pointer]:
+                  - /url: /alcor55/Cardputer-GPS-Info/search?l=c%2B%2B
+                  - img [ref=e513]
+                  - generic [ref=e515]: C++
+                  - generic [ref=e516]: 100.0%
+  - contentinfo [ref=e518]:
+    - heading "Footer" [level=2] [ref=e519]
+    - generic [ref=e520]:
+      - generic [ref=e521]:
+        - link "GitHub Homepage" [ref=e522] [cursor=pointer]:
+          - /url: https://github.com
+          - img [ref=e523]
+        - generic [ref=e525]: © 2026 GitHub, Inc.
+      - navigation "Footer" [ref=e526]:
+        - heading "Footer navigation" [level=3] [ref=e527]
+        - list "Footer navigation" [ref=e528]:
+          - listitem [ref=e529]:
+            - link "Terms" [ref=e530] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+          - listitem [ref=e531]:
+            - link "Privacy" [ref=e532] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+          - listitem [ref=e533]:
+            - link "Security" [ref=e534] [cursor=pointer]:
+              - /url: https://github.com/security
+          - listitem [ref=e535]:
+            - link "Status" [ref=e536] [cursor=pointer]:
+              - /url: https://www.githubstatus.com/
+          - listitem [ref=e537]:
+            - link "Community" [ref=e538] [cursor=pointer]:
+              - /url: https://github.community/
+          - listitem [ref=e539]:
+            - link "Docs" [ref=e540] [cursor=pointer]:
+              - /url: https://docs.github.com/
+          - listitem [ref=e541]:
+            - link "Contact" [ref=e542] [cursor=pointer]:
+              - /url: https://support.github.com?tags=dotcom-footer
+          - listitem [ref=e543]:
+            - button "Manage cookies" [ref=e545] [cursor=pointer]
+          - listitem [ref=e546]:
+            - button "Do not share my personal information" [ref=e548] [cursor=pointer]

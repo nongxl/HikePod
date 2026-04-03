@@ -97,10 +97,11 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 
 ### 致谢
 
-### 致谢
+### 致谢与来源 (Credits & Acknowledgements)
 
-GPS Info模式是由[Cardputer GPS Info](https://github.com/alcor55/Cardputer-GPS-Info)项目移植而来的，在此特别感谢原作者alcor55。
-特别感谢 [alcor55](https://github.com/alcor55) 开发的Cardputer GPS Info项目，为HikePod提供了GPS信息显示功能的基础。
+本项目的 **GPS Info** 详细模式逻辑移植自 [Cardputer-GPS-Info](https://github.com/alcor55/Cardputer-GPS-Info) 项目。
+
+在此特别感谢原作者 [alcor55](https://github.com/alcor55) 的优秀工作，为 HikePod 的卫星定位信息显示功能奠定了基础。
 
 ### 许可证
 
@@ -187,7 +188,7 @@ HikePod is an outdoor hiking navigation project based on M5Stack Cardputer ADV, 
 
 ### Acknowledgements
 
-GPS Info mode is ported from the [Cardputer GPS Info](https://github.com/alcor55/Cardputer-GPS-Info) project. Special thanks to the original author, alcor55, for providing the foundation.
+The **GPS Info** detailed mode in this project is ported or derived from the [Cardputer-GPS-Info](https://github.com/alcor55/Cardputer-GPS-Info) project. Special thanks to the original author, [alcor55](https://github.com/alcor55), for his excellent work which provided the foundation for the GPS satellite information display in HikePod.
 
 ### License
 

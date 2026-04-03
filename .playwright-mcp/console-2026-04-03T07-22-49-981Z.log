@@ -1,0 +1,9 @@
+[   21938ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_TIMED_OUT @ https://avatars.githubusercontent.com/u/49191699?s=64&v=4:0
+[   49064ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_TIMED_OUT @ https://avatars.githubusercontent.com/u/49191699?v=4&size=40:0
+[   53326ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/1.jpeg:0
+[   53334ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/6.jpeg:0
+[   53334ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/2.jpeg:0
+[   53334ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/3.jpeg:0
+[   53334ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/4.jpeg:0
+[   53334ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/5.jpeg:0
+[   53335ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ https://raw.githubusercontent.com/alcor55/Cardputer-GPS-Info/main/7.png:0
