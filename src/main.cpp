@@ -7,7 +7,7 @@
  * Original project: https://github.com/alcor55/Cardputer-GPS-Info
  * 
  * @author HikePod Contributors
- * @license MIT
+ * @license PolyForm Noncommercial License 1.0.0
  */
 
 #include <M5Cardputer.h>

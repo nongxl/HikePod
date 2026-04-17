@@ -105,7 +105,7 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 
 ### 许可证
 
-MIT License
+PolyForm Noncommercial License 1.0.0
 
 ## English
 
@@ -192,4 +192,4 @@ The **GPS Info** detailed mode in this project is ported or derived from the [Ca
 
 ### License
 
-MIT License
+PolyForm Noncommercial License 1.0.0
