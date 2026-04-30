@@ -270,9 +270,9 @@ bool configsMenu = false;
 int configsMenuSel = 0;
 String configsTmp[3] = {"", "", ""};  // 0 Rx, 1 Tx, 2 Baud.
 
-// GPS引脚和波特率
-int gpsRxPin = 15; // Cardputer Rx pin <- GPS Tx pin.
-int gpsTxPin = 13; // Cardputer Tx pin <- GPS Rx pin.
+// GPS引脚和波特率 (v1.1 将在 setup 中动态分配以避免键盘冲突)
+int gpsRxPin = -1; 
+int gpsTxPin = -1; 
 // 将GPS波特率从9600修改为115200，以匹配模块默认波特率
 int gpsBaud = 115200;
 
@@ -329,6 +329,7 @@ void drawFileSelectionMenu() {
   // 绘制菜单标题
   canvas.setTextColor(TFT_BLUE, TFT_WHITE);
   canvas.setFont(&fonts::efontCN_12);
+  canvas.setTextDatum(TL_DATUM);
   canvas.setCursor(10, 10);
   canvas.println("Select KML File");
   
@@ -336,19 +337,16 @@ void drawFileSelectionMenu() {
   canvas.drawLine(10, 25, SCREEN_WIDTH - 10, 25, TFT_BLACK);
   
   // 绘制文件列表
-  canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-  
-  int yPos = 35;
-  int maxVisibleFiles = 6; // 中文字体较大，减少显示行数
+  int yPos = 32;
+  int rowHeight = 20; // 增加行高以适应中文字体并留出间距
+  int maxVisibleFiles = 5; // 配合行高减少显示行数，防止超出屏幕
   int startIndex = 0;
   
   int totalItems = (int)kmlFileList.size();
-  
   if (totalItems <= maxVisibleFiles) {
     startIndex = 0;
   } else {
     int cursorOffset = maxVisibleFiles / 2;
-    
     if (selectedFileIndex < cursorOffset) {
       startIndex = 0;
     } else if (selectedFileIndex >= totalItems - cursorOffset) {
@@ -360,36 +358,35 @@ void drawFileSelectionMenu() {
   
   for (size_t i = startIndex; i < kmlFileList.size() && i < startIndex + maxVisibleFiles; i++) {
     if (i == selectedFileIndex) {
-      // 绘制选中项 - 使用蓝色高亮
-      canvas.fillRect(10, yPos - 2, SCREEN_WIDTH - 20, 16, TFT_BLUE);
+      // 绘制选中项 - 使用蓝色高亮，高度增加到 20 以覆盖整行
+      canvas.fillRect(5, yPos - 4, SCREEN_WIDTH - 25, rowHeight, TFT_BLUE);
       canvas.setTextColor(TFT_WHITE, TFT_BLUE);
     } else {
       canvas.setTextColor(TFT_BLACK, TFT_WHITE);
     }
     
-    canvas.setCursor(15, yPos);
+    canvas.setCursor(10, yPos);
     canvas.println(kmlFileList[i]);
-    yPos += 16; // 增加行高以适应中文字体
+    yPos += rowHeight; 
   }
   
-  // 绘制滚动条（当文件数量超过最大可见数量时）
+  // 绘制滚动条
   if (kmlFileList.size() > maxVisibleFiles) {
     int scrollbarX = SCREEN_WIDTH - 8;
-    int scrollbarY = 35;
-    int scrollbarHeight = maxVisibleFiles * 12;
+    int scrollbarY = 32;
+    int scrollbarHeight = maxVisibleFiles * rowHeight;
     int scrollbarWidth = 4;
     
-    // 绘制滚动条背景（浅灰色）
+    // 绘制滚动条背景
     canvas.fillRect(scrollbarX, scrollbarY, scrollbarWidth, scrollbarHeight, 0xC618);
     
-    // 计算滚动条滑块位置和高度
-    float totalItems = kmlFileList.size();
-    float visibleItems = maxVisibleFiles;
-    float scrollRatio = startIndex / (totalItems - visibleItems);
-    float thumbHeight = (visibleItems / totalItems) * scrollbarHeight;
+    // 计算滚动条滑块
+    float total = kmlFileList.size();
+    float visible = maxVisibleFiles;
+    float scrollRatio = (float)startIndex / (total - visible);
+    float thumbHeight = (visible / total) * scrollbarHeight;
     float thumbY = scrollbarY + scrollRatio * (scrollbarHeight - thumbHeight);
     
-    // 绘制滚动条滑块（深灰色）
     canvas.fillRect(scrollbarX, thumbY, scrollbarWidth, thumbHeight, 0x7BEF);
   }
   
@@ -574,6 +571,17 @@ void setup() {
   Serial.println("Initializing M5Cardputer...");
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // 启用键盘 - Cardputer ADV正确方式
+
+  // 为 Cardputer v1.1 自动适配 GPS 引脚 (防止与键盘矩阵 GPIO 13/15 冲突)
+  if (M5.getBoard() == m5::board_t::board_M5Cardputer) {
+      gpsRxPin = 2; // Cardputer v1.1 Grove G2
+      gpsTxPin = 1; // Cardputer v1.1 Grove G1
+      Serial.println("Cardputer v1.1 detected: Using Grove pins (G2/G1) for GPS to avoid keyboard conflict (G15/G13)");
+  } else {
+      gpsRxPin = 15; // Cardputer ADV 内部 GNSS Rx
+      gpsTxPin = 13; // Cardputer ADV 内部 GNSS Tx
+      Serial.println("Cardputer ADV detected: Using internal GNSS pins (G15/G13)");
+  }
   
   // 增加启动延迟以稳定电源和 I2C 总线，并清空初始可能的随机按键输入（解决幽灵按键问题）
   delay(300);
@@ -600,25 +608,25 @@ void setup() {
   // 初始化SD卡（使用独立的SPI对象）
   
   // 永久禁用LoRa模块的SPI通信，因为项目不需要LoRa功能
-  // 根据管脚映射，CAP-LoRa-1262模块的NSS引脚连接到Cardputer-Adv的G5
-  #define LORA_CS 5
-  pinMode(LORA_CS, OUTPUT);
-  digitalWrite(LORA_CS, HIGH); // 设置为HIGH以永久禁用LoRa模块的SPI通信
-  Serial.println("Permanently disabled LoRa module SPI communication (project doesn't require LoRa functionality)");
-  
-  // 额外的延迟，确保LoRa模块完全禁用
-  //delay(100);
-  
-  // 同时禁用LoRa模块的其他相关引脚，进一步减少电源消耗
-  #define LORA_RST 8  // LoRa_RST连接到G8
-  #define LORA_IRQ 6  // LoRa_IRQ连接到G6
-  #define LORA_BUSY 10 // LoRa_BUSY连接到G10
-  
-  pinMode(LORA_RST, OUTPUT);
-  digitalWrite(LORA_RST, LOW); // 设置为LOW以保持LoRa模块复位状态
-  pinMode(LORA_IRQ, INPUT);
-  pinMode(LORA_BUSY, INPUT);
-  Serial.println("Disabled additional LoRa module pins to reduce power consumption");
+  // 警告：Cardputer v1.1 的矩阵键盘直接使用 GPIO (包含 5, 6, 8)，必须只在 ADV 版本执行此操作
+  if (M5.getBoard() == m5::board_t::board_M5CardputerADV) {
+    // 根据管脚映射，CAP-LoRa-1262模块的NSS引脚连接到Cardputer-Adv的G5
+    #define LORA_CS 5
+    pinMode(LORA_CS, OUTPUT);
+    digitalWrite(LORA_CS, HIGH); // 设置为HIGH以永久禁用LoRa模块的SPI通信
+    Serial.println("Permanently disabled LoRa module SPI communication (Cardputer ADV)");
+    
+    // 同时禁用LoRa模块的其他相关引脚，进一步减少电源消耗
+    #define LORA_RST 8  // LoRa_RST连接到G8
+    #define LORA_IRQ 6  // LoRa_IRQ连接到G6
+    #define LORA_BUSY 10 // LoRa_BUSY连接到G10
+    
+    pinMode(LORA_RST, OUTPUT);
+    digitalWrite(LORA_RST, LOW); // 设置为LOW以保持LoRa模块复位状态
+    pinMode(LORA_IRQ, INPUT);
+    pinMode(LORA_BUSY, INPUT);
+    Serial.println("Disabled additional LoRa module pins to reduce power consumption (Cardputer ADV)");
+  }
   
   // 使用官方推荐的SD卡引脚配置
   #define SD_SCK 40
@@ -867,14 +875,48 @@ void loop() {
   // 更新BMI270姿态传感器数据
   updateOrientation();
   
-  // 检查键盘状态变化
-  bool keyboardChanged = M5Cardputer.Keyboard.isChange();
-  bool keyboardPressed = M5Cardputer.Keyboard.isPressed();
+  // 检查键盘状态变化（极致兼容方案：带边沿检测的轮询，彻底解决抖动和闪退）
+  static Keyboard_Class::KeysState prevRawKeys; // 记录上一帧的原始物理状态
+  Keyboard_Class::KeysState rawKeys;            // 当前帧扫描到的原始物理状态
+  rawKeys.reset();
+
+  // 1. 扫描物理按键状态
+  if (M5Cardputer.Keyboard.isKeyPressed(0x28)) rawKeys.enter = true;
+  if (M5Cardputer.Keyboard.isKeyPressed(0x2a)) rawKeys.del = true;
+  if (M5Cardputer.Keyboard.isKeyPressed(0x2b)) rawKeys.tab = true;
+
+  const char check_chars[] = "hvcwsiop[]=+-_ t;.,/`abcdefghijklmnopqrstuvwxyz0123456789";
+  for (int i = 0; i < sizeof(check_chars) - 1; i++) {
+      if (M5Cardputer.Keyboard.isKeyPressed(check_chars[i])) rawKeys.word.push_back(check_chars[i]);
+  }
+  const char shift_chars[] = "~!@#$%^&*()_{}:\"<>?|";
+  for (int i = 0; i < sizeof(shift_chars) - 1; i++) {
+      if (M5Cardputer.Keyboard.isKeyPressed(shift_chars[i])) rawKeys.word.push_back(shift_chars[i]);
+  }
+
+  // 2. 边沿检测逻辑：仅将“本帧新按下”的键作为事件触发，防止矩阵噪声导致的重复触发
   Keyboard_Class::KeysState keys;
+  keys.reset();
+  bool keyboardChanged = false;
+
+  if (rawKeys.enter && !prevRawKeys.enter) { keys.enter = true; keyboardChanged = true; }
+  if (rawKeys.del && !prevRawKeys.del) { keys.del = true; keyboardChanged = true; }
+  if (rawKeys.tab && !prevRawKeys.tab) { keys.tab = true; keyboardChanged = true; }
+
+  for (char c : rawKeys.word) {
+      bool alreadyPressed = false;
+      for (char p : prevRawKeys.word) if (p == c) alreadyPressed = true;
+      if (!alreadyPressed) {
+          keys.word.push_back(c);
+          keyboardChanged = true;
+      }
+  }
+
+  // 3. 记录当前状态供下一帧对比
+  prevRawKeys = rawKeys;
   
-  // 每次都获取最新的keys状态，而不是只在keyboardChanged && keyboardPressed为true时才获取
-  // 这样可以确保InteractionManager能够检测到所有按键输入，包括平移操作按键
-  keys = M5Cardputer.Keyboard.keysState();
+  // 保持与项目后续逻辑兼容
+  bool keyboardPressed = (keys.word.size() > 0 || keys.enter || keys.del || keys.tab);
   
   // 处理键盘输入控制逻辑
   handleControls(keyboardChanged, keyboardPressed, keys);
@@ -1940,10 +1982,10 @@ void updateScreen(bool force) {
 /*    Draw the satellites sky plot graph.
 */
 void drawSkyPlot() {
-  int x = 143;
-  int y = 27;
+  int x = 144;
+  int y = 22; // 与数据表对齐
   int w = 96;
-  int h = w-1;
+  int h = 96; // 8 行 * 12 像素 = 96
   int half_side = h * 0.5;
   int cx = x + half_side;
   int cy = y + half_side;
@@ -2012,127 +2054,99 @@ void drawSkyPlot() {
 
 /*    Draw the satellites main data table.
 */
-void drawSatelliteDataTab(){
+void drawSatelliteDataTab() {
   int x = 1;
-  int y = 26;
-  // Column 1.
-  // Labels.
+  int y = 22; // 从 22 开始 (11 + 11)
+  int h = 12; // 行高减小到 12
+  // ... [保持原有 labels/values 逻辑]
   const char* c1labels[] = { "Lat", "Lng", "Alt", "Spd", "Crs", "Date", "Time", "HDOP" };
-  // Values.
   char c1values[8][20];
-  if (currentLocation.isValid) {sprintf(c1values[0], "%.6f", currentLocation.latitude);} else {sprintf(c1values[0], "NoFix");}
-  if (currentLocation.isValid) {sprintf(c1values[1], "%.6f", currentLocation.longitude);} else {sprintf(c1values[1], "NoFix");}
-  if (currentLocation.isValid) {sprintf(c1values[2], "%.2f", currentLocation.altitude);} else {sprintf(c1values[2], "0");}
-  if (currentLocation.isValid) {sprintf(c1values[3], "%.1f", gnssModule.getSpeedKmph());} else {sprintf(c1values[3], "0");}
-  if (currentLocation.isValid) {sprintf(c1values[4], "%.1f", gnssModule.getCourseDeg());} else {sprintf(c1values[4], "0");}
-  if (currentLocation.isValid && gnssModule.isDateValid()) {sprintf(c1values[5], "%02d/%02d/%02d", gnssModule.getLocalDay(), gnssModule.getLocalMonth(), gnssModule.getLocalYear() % 100);} else {sprintf(c1values[5], "0");}
-  if (currentLocation.isValid && gnssModule.isTimeValid()) {sprintf(c1values[6], "%02d:%02d:%02d", gnssModule.getLocalHour(), gnssModule.getLocalMinute(), gnssModule.getLocalSecond());} else {sprintf(c1values[6], "0");}
-  if (currentLocation.isValid) {sprintf(c1values[7], "%.1f", gnssModule.getHDOP());} else {sprintf(c1values[7], "0");}
-  // Draw.
+  if (currentLocation.isValid) {
+    sprintf(c1values[0], "%.6f", currentLocation.latitude);
+    sprintf(c1values[1], "%.6f", currentLocation.longitude);
+    sprintf(c1values[2], "%.2f", currentLocation.altitude);
+    sprintf(c1values[3], "%.1f", gnssModule.getSpeedKmph());
+    sprintf(c1values[4], "%.1f", gnssModule.getCourseDeg());
+    if (gnssModule.isDateValid()) sprintf(c1values[5], "%02d/%02d/%02d", gnssModule.getLocalDay(), gnssModule.getLocalMonth(), gnssModule.getLocalYear() % 100); else sprintf(c1values[5], "0");
+    if (gnssModule.isTimeValid()) sprintf(c1values[6], "%02d:%02d:%02d", gnssModule.getLocalHour(), gnssModule.getLocalMinute(), gnssModule.getLocalSecond()); else sprintf(c1values[6], "0");
+    sprintf(c1values[7], "%.1f", gnssModule.getHDOP());
+  } else {
+    sprintf(c1values[0], "NoFix"); sprintf(c1values[1], "NoFix");
+    for(int i=2; i<8; i++) sprintf(c1values[i], "0");
+  }
+
   for (int i = 0; i < 8; i++) {
-    canvas.fillRect(x, y, 90, 13, TFT_BLACK);
-    canvas.drawRect(x, y, 90, 13, TFT_DARKGREY);
+    canvas.fillRect(x, y, 90, h, TFT_BLACK);
+    canvas.drawRect(x, y, 90, h, TFT_DARKGREY);
     canvas.setTextColor(TFT_WHITE);
     canvas.setTextDatum(TL_DATUM);
-    canvas.setCursor(x + 4, y + 3);
-    canvas.setTextSize(1);
+    canvas.setCursor(x + 4, y + 2); 
     canvas.printf("%s: %s", c1labels[i], c1values[i]);
-    y += 12;
+    y += h; 
   }
-  // Column 2.
-  y = 26;
-  x += 89;
-  // Labels.
-  const char* c2labels[] = { "Seen", "Visb", "Used", "InFx", "GPS", "Gln", "Gal", "BDo" };
-  // Values.
+
+  y = 22;
+  x = 91;
+  const char* c2labels[] = { "Seen", "Wish", "Used", "InFx", "GPS", "Gln", "Gal", "BDo" };
   char c2values[8][12];
   if (currentLocation.isValid) {
-    int totalAll = satellites.size(); // Ever seen.
-    int totalUsed = 0;                // Ever used in fix.
-    int totalVisible = 0;             // Now visible.
-    int gpsVisible = 0;
-    int glonassVisible = 0;
-    int galileoVisible = 0;
-    int beidouVisible = 0;
+    int tAll = satellites.size(), tUsed = 0, tVis = 0, gV = 0, glV = 0, gaV = 0, bdV = 0;
     for (auto &sat : satellites) {
-      if (sat.used) totalUsed++;
+      if (sat.used) tUsed++;
       if (sat.visible) {
-        totalVisible++;
-        if (sat.system == "GPS") gpsVisible++;
-        else if (sat.system == "GLONASS") glonassVisible++;
-        else if (sat.system == "Galileo") galileoVisible++;
-        else if (sat.system == "BeiDou") beidouVisible++;
+        tVis++;
+        if (sat.system == "GPS") gV++;
+        else if (sat.system == "GLONASS") glV++;
+        else if (sat.system == "Galileo") gaV++;
+        else if (sat.system == "BeiDou") bdV++;
       }
     }
-    sprintf(c2values[0], "%d", totalAll);
-    sprintf(c2values[1], "%d", totalVisible);
-    sprintf(c2values[2], "%d", totalUsed);
-    sprintf(c2values[3], "%d", gnssModule.getSatelliteCount()); // 使用参与定位的卫星数
-    sprintf(c2values[4], "%d", gpsVisible);
-    sprintf(c2values[5], "%d", glonassVisible);
-    sprintf(c2values[6], "%d", galileoVisible);
-    sprintf(c2values[7], "%d", beidouVisible);
+    sprintf(c2values[0], "%d", tAll); sprintf(c2values[1], "%d", tVis); sprintf(c2values[2], "%d", tUsed);
+    sprintf(c2values[3], "%d", gnssModule.getSatelliteCount());
+    sprintf(c2values[4], "%d", gV); sprintf(c2values[5], "%d", glV);
+    sprintf(c2values[6], "%d", gaV); sprintf(c2values[7], "%d", bdV);
   } else {
-    // No fix, display 0 for all satellite-related values
-    for (int i = 0; i < 8; i++) {
-      sprintf(c2values[i], "0");
-    }
+    for (int i = 0; i < 8; i++) sprintf(c2values[i], "0");
   }
-  // Draw.
+
   for (int i = 0; i < 8; i++) {
-    canvas.fillRect(x, y, 53, 13, TFT_BLACK);
-    canvas.drawRect(x, y, 53, 13, TFT_DARKGREY);
+    canvas.fillRect(x, y, 53, h, TFT_BLACK);
+    canvas.drawRect(x, y, 53, h, TFT_DARKGREY);
     canvas.setTextColor(TFT_WHITE);
     canvas.setTextDatum(TL_DATUM);
-    canvas.setCursor(x + 4, y + 3);
-    canvas.setTextSize(1);
+    canvas.setCursor(x + 4, y + 2);
     canvas.printf("%s: %s", c2labels[i], c2values[i]);
-    y += 12;
+    y += h;
   }
 }
 
-/*    Draw the satellites main data table.
-*/
 void drawHeader(){
-  int x = 1;
-  int y = 1;
   int w = SCREEN_WIDTH;
-  int h = 13;
-  canvas.fillRect(x, y, w, h, TFT_GREEN);
+  int h = 11; // 压缩到 11
+  canvas.fillRect(0, 0, w, h, TFT_GREEN);
   canvas.setTextColor(TFT_BLACK);
-  canvas.setTextDatum(TL_DATUM);
-  canvas.setCursor(x + 4, y + 3);
-  canvas.printf("%-1s", "      -= Cardputer GPS Info =-");
-  // Key map.
-  canvas.fillRect(x, y+h-1, w, h, TFT_GREEN);
-  canvas.setTextColor(TFT_BLACK); // 改为黑色以在绿色背景上更清晰
-  canvas.setTextDatum(TL_DATUM);
-  canvas.setCursor(x + 4, y+h + 3);
-  canvas.printf("%-1s", "[s]On/Off [c]Config [h]Help [Tab]Mode");
+  canvas.setTextDatum(MC_DATUM); 
+  canvas.setTextSize(1);
+  canvas.drawString("-= Cardputer GPS Info =-", w/2, h/2 + 1);
+  
+  canvas.fillRect(0, h, w, h, TFT_GREEN);
+  canvas.drawString("[s]On/Off [c]Config [h]Help [Tab]Mode", w/2, h + h/2 + 1);
 }
 
-/*    Draw app features status.
-*/
 void drawStatus(){
-  int x = 1;
-  int y = 122;
+  int y = 118; // 22 + 96
   int w = SCREEN_WIDTH;
-  int h = 13;
-  char statusChar[64];
-  statusChar[0] = '\0';
-  const char* gpsStr = "Off";
-  if (gpsSerialState == GPS_ON) gpsStr = "On";
-  else if (gpsSerialState == GPS_ERR) gpsStr = "Err";
-  snprintf(statusChar + strlen(statusChar), sizeof(statusChar) - strlen(statusChar),"GP:%s ", gpsStr);
-  snprintf(statusChar + strlen(statusChar),sizeof(statusChar) - strlen(statusChar),"Rx:%d Tx:%d ", gpsRxPin, gpsTxPin);
-  snprintf(statusChar + strlen(statusChar),sizeof(statusChar) - strlen(statusChar),"Bd:%d", gpsBaud);
-  canvas.fillRect(x, y, w, h, TFT_BLACK);
-  canvas.drawRect(x, y, w, h, TFT_DARKGREY);
+  int h = 11; // 压缩到 11
+  char buf[64];
+  const char* gpsStr = (gpsSerialState == GPS_ON) ? "On" : (gpsSerialState == GPS_ERR ? "Err" : "Off");
+  snprintf(buf, sizeof(buf), "GP:%s Rx:%d Tx:%d Bd:%d", gpsStr, gpsRxPin, gpsTxPin, gpsBaud);
+  
+  canvas.fillRect(0, y, w, h, TFT_BLACK);
+  canvas.drawRect(0, y, w, h, TFT_DARKGREY);
   canvas.setTextColor(TFT_WHITE);
-  canvas.setTextDatum(TL_DATUM);
-  canvas.setCursor(x + 4, y + 3);
+  canvas.setTextDatum(MC_DATUM);
   canvas.setTextSize(1);
-  canvas.printf("%-1s", statusChar);
+  canvas.drawString(buf, w/2, y + h/2 + 1);
 }
 
 /*    Handle keyboard data inputs for GPS Info mode.
@@ -2142,33 +2156,43 @@ void handleGPSInfoKeys(bool keyboardChanged, bool keyboardPressed, Keyboard_Clas
   if(keyboardChanged) {
     if(keyboardPressed) {
       
-      // 处理其他GPS Info模式的按键
+      // 处理其他GPS Info模式的按键 (增加 200ms 消抖)
+      static unsigned long lastGPSKeyTime = 0;
+      const unsigned long GPS_KEY_DEBOUNCE = 200;
+      unsigned long currentTime = millis();
+
       for(auto key : keys.word) {
-        // 如果需要处理特定于GPS Info模式的按键，可以在这里添加
-        // 目前只处理通用功能键
-        if (key == 's') {
-          gpsSerial = !gpsSerial;
-          initGPSSerial(gpsSerial);
-          gpsSerialState = gpsSerial ? GPS_ON : GPS_OFF;
-          drawStatus();
-        }
-        else if (key == 'c') {
-          configsMenu = !configsMenu; // Invert status.
-          drawConfig(configsMenu);
-        }
-        else if (key == 'h') {
-          helpMenu = !helpMenu; // Invert status.
-          drawHelp(helpMenu);
-        }
-        else if (key == 'i') {
-          infoMenu = !infoMenu; // Invert status.
-          drawInfo(infoMenu);
-        }
-        else if (key == 'p') {
-          hidePlotId = !hidePlotId; // Invert status.
-        }
-        else if (key == 'o') {
-          hidePlotSystem = !hidePlotSystem; // Invert status.
+        if (currentTime - lastGPSKeyTime > GPS_KEY_DEBOUNCE) {
+          if (key == 's') {
+            gpsSerial = !gpsSerial;
+            initGPSSerial(gpsSerial);
+            gpsSerialState = gpsSerial ? GPS_ON : GPS_OFF;
+            drawStatus();
+            lastGPSKeyTime = currentTime;
+          }
+          else if (key == 'c') {
+            configsMenu = !configsMenu; // Invert status.
+            drawConfig(configsMenu);
+            lastGPSKeyTime = currentTime;
+          }
+          else if (key == 'h') {
+            helpMenu = !helpMenu; // Invert status.
+            drawHelp(helpMenu);
+            lastGPSKeyTime = currentTime;
+          }
+          else if (key == 'i') {
+            infoMenu = !infoMenu; // Invert status.
+            drawInfo(infoMenu);
+            lastGPSKeyTime = currentTime;
+          }
+          else if (key == 'p') {
+            hidePlotId = !hidePlotId; // Invert status.
+            lastGPSKeyTime = currentTime;
+          }
+          else if (key == 'o') {
+            hidePlotSystem = !hidePlotSystem; // Invert status.
+            lastGPSKeyTime = currentTime;
+          }
         }
       }
       
@@ -2371,15 +2395,21 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             lastBacktickPress = currentTime;
             Serial.println("Toggled debug info visibility");
           }
-        } else if (key == 'h') {
-          // 切换帮助菜单
-          helpMenuVisible = !helpMenuVisible;
-          if (helpMenuVisible) {
-            drawHikePodHelpMenu(true);
-          } else {
-            drawHikePodHelpMenu(false);
+        } else if (key == 'h' && currentMode == MODE_HIKEPOD) {
+          // 切换帮助菜单 (增加 200ms 消抖)
+          static unsigned long lastHPress = 0;
+          const unsigned long H_DEBOUNCE_DELAY = 200;
+          unsigned long currentTime = millis();
+          if (currentTime - lastHPress > H_DEBOUNCE_DELAY) {
+            helpMenuVisible = !helpMenuVisible;
+            if (helpMenuVisible) {
+              drawHikePodHelpMenu(true);
+            } else {
+              drawHikePodHelpMenu(false);
+            }
+            lastHPress = currentTime;
           }
-        } else if (key == 'v') {
+        } else if (key == 'v' && currentMode == MODE_HIKEPOD) {
           // 切换视图模式
           static unsigned long lastVPress = 0;
           const unsigned long V_DEBOUNCE_DELAY = 200;
@@ -2397,7 +2427,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             M5Cardputer.Display.setBrightness(screenBrightness);
             canvas.pushSprite(0, 0);
           }
-        } else if (key == ']') {
+        } else if (key == ']' && currentMode == MODE_HIKEPOD) {
           // 增加垂直放大系数
           static unsigned long lastBracketPress = 0;
           const unsigned long BRACKET_DEBOUNCE_DELAY = 200;
@@ -2411,7 +2441,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
             canvas.pushSprite(0, 0);
           }
-        } else if (key == '[') {
+        } else if (key == '[' && currentMode == MODE_HIKEPOD) {
           // 减少垂直放大系数
           static unsigned long lastBracketPress2 = 0;
           const unsigned long BRACKET_DEBOUNCE_DELAY2 = 200;
@@ -2425,7 +2455,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
             canvas.pushSprite(0, 0);
           }
-        } else if (key == '=' || key == '+') {
+        } else if ((key == '=' || key == '+') && currentMode == MODE_HIKEPOD) {
           // 3D视图缩放 - 放大
           if (currentViewMode == MODE_3D) {
             static unsigned long lastEqualPress = 0;
@@ -2440,7 +2470,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               canvas.pushSprite(0, 0);
             }
           }
-        } else if (key == '-' || key == '_') {
+        } else if ((key == '-' || key == '_') && currentMode == MODE_HIKEPOD) {
           // 3D视图缩放 - 缩小
           if (currentViewMode == MODE_3D) {
             static unsigned long lastMinusPress = 0;
@@ -2455,7 +2485,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               canvas.pushSprite(0, 0);
             }
           }
-        } else if (key == ' ') {
+        } else if (key == ' ' && currentMode == MODE_HIKEPOD) {
           // 空格键切换旋转中心
           if (currentViewMode == MODE_3D) {
             static unsigned long lastSpacePress = 0;
@@ -2469,7 +2499,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               canvas.pushSprite(0, 0);
             }
           }
-        } else if (key == ';' || key == '.' || key == ',' || key == '/') {
+        } else if ((key == ';' || key == '.' || key == ',' || key == '/') && currentMode == MODE_HIKEPOD) {
           // 方向键用于3D视图平移（仅当没有菜单打开时）
           if (currentViewMode == MODE_3D && !settingsMenuOpen && !fileSelectionMenuOpen) {
             const int PAN_STEP = 10;
@@ -2507,7 +2537,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             }
             lastCPress = currentTime;
           }
-        } else if (key == 'w') {
+        } else if (key == 'w' && currentMode == MODE_HIKEPOD) {
           // WiFi 热点/HTTP 管理 (添加防抖并修复重复触发 Bug)
           static unsigned long lastWPress = 0;
           const unsigned long W_DEBOUNCE_DELAY = 200;
