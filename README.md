@@ -11,8 +11,8 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 
 ### 技术要点
 
-- **硬件需求**：M5Stack Cardputer ADV + CAP-LoRa-1262 + SD卡
-- **GPS模块**：支持多种GNSS模块（如 CAP-1262），Rx/Tx引脚可在设置中动态修改
+- **硬件需求**：M5Stack Cardputer (ADV 或 v1.1) + CAP-LoRa-1262 + SD卡
+- **GPS模块**：支持多种GNSS模块（如 CAP-1262）。系统会自动检测硬件版本：ADV 使用内置引脚 (G13/G15)，v1.1 自动重映射至 Grove 接口 (G1/G2) 以解决键盘矩阵冲突。Rx/Tx引脚亦可在设置中手动修改。
 - **显示技术**：采用离屏渲染（M5GFX Canvas）与高效 UI 绘制，全局支持中文字体 (`efontCN_12`)
 - **离线导航**：支持流式解析 KML 路径文件，具备动态下采样和缩放自动适配功能
 - **电量优化**：徒步实测单次充电可支持约 7-8 小时连续息屏定位（配合 30s 亮屏超时）
@@ -21,7 +21,7 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 ### 操作使用方法
 
 #### 刷入固件说明
-- **刷入固件**：通过 M5Burner 或 PlatformIO 将固件刷入 M5Stack Cardputer ADV
+- **刷入固件**：通过 M5Burner 或 PlatformIO 将固件刷入 M5Stack Cardputer (ADV/v1.1)
 - **合并固件**：
    ```bash
    esptool --chip esp32s3 merge-bin -o cardputer-factory.bin --flash-mode dio --flash-size 8MB 0x0000 .pio/build/m5stack-cardputer/bootloader.bin 0x8000 .pio/build/m5stack-cardputer/partitions.bin 0xe000 ./boot_app0.bin 0x10000 .pio/build/m5stack-cardputer/firmware.bin
@@ -89,11 +89,14 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 - [x] 自动缩放适配功能 (Auto-Fit Range)
 - [x] 缩放级别扩展至 100KM，提升全局视野
 - [x] GPS Info 模式排版与本地时区自动计算
+- [x] Cardputer v1.1 全面兼容 (解决键盘/GPS 引脚冲突)
+- [x] 输入系统稳定性优化 (全局消抖与按键边缘检测)
+- [x] GPS Info 模式 UI 深度排版优化 (适配屏幕高度)
+- [x] KML 选择菜单 UI 优化 (增加行距与高亮修复)
 
 ### 后续计划
 1. **省电策略优化**：进一步研究息屏下的低功耗运行。
 2. **高程数据增强**：考虑支持更精细的海拔记录。
-3. **支持 Cardputer 1.1**：适配非 ADV 版本（如果有需求）。
 
 ### 致谢
 
@@ -115,8 +118,8 @@ HikePod is an outdoor hiking navigation project based on M5Stack Cardputer ADV, 
 
 ### Technical Points
 
-- **Hardware Requirements**: M5Stack Cardputer ADV + CAP-LoRa-1262 + SD card
-- **GPS Module**: Supports multiple GNSS modules (e.g., CAP-1262), Rx/Tx pins can be dynamically modified in settings
+- **Hardware Requirements**: M5Stack Cardputer (ADV or v1.1) + CAP-LoRa-1262 + SD card
+- **GPS Module**: Supports multiple GNSS modules (e.g., CAP-1262). System auto-detects hardware: ADV uses internal pins (G13/G15), while v1.1 auto-remaps to Grove Port (G1/G2) to resolve keyboard matrix conflicts. Rx/Tx pins are also manually adjustable.
 - **Display Technology**: Off-screen rendering (M5GFX Canvas) with efficient UI drawing, globally supports Chinese fonts (`efontCN_12`)
 - **Offline Navigation**: Streaming parse for KML path files with dynamic downsampling and auto-fit view scaling
 - **Power Optimization**: Field-tested to last 7-8 hours of continuous tracking with screen-off positioning
@@ -180,11 +183,14 @@ HikePod is an outdoor hiking navigation project based on M5Stack Cardputer ADV, 
 - [x] Auto-fit viewport functionality
 - [x] Expanded zoom range up to 100KM for better overview
 - [x] GPS Info layout and local timezone auto-calculation
+- [x] Full Cardputer v1.1 compatibility (Resolved Keyboard/GPS pin conflict)
+- [x] Input system stability (Global debouncing & edge detection)
+- [x] GPS Info mode UI layout optimization (Fits 135px height)
+- [x] KML file menu UI enhancement (Spacing & highlight fix)
 
 ### Future Plans
 1. **Low Power Strategy**: Deep sleep and further screen-off optimizations.
 2. **Enhanced Altitude Data**: Finer resolution altitude logging.
-3. **Cardputer 1.1 Support**: Adapt for non-ADV versions if requested.
 
 ### Acknowledgements
 
