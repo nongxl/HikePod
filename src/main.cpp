@@ -481,17 +481,29 @@ void onKMLProgressUpdate(int percent, int pointsLoaded, size_t bytesRead, size_t
   canvas.setCursor(winX + 10, winY + 8);
   canvas.printf("正在加载路线... %c", spinnerChars[spinnerIdx]);
   
-  // 文件名（小字显示）
-  canvas.setFont(&fonts::Font0);
-  canvas.setTextColor(0x52AA, TFT_WHITE);
-  canvas.setCursor(winX + 10, winY + 26);
-  canvas.printf("File: %.24s", fName);
+  // 文件名（支持中文字体 efontCN_12 并按窗口宽度安全截断）
+  canvas.setFont(&fonts::efontCN_12);
+  canvas.setTextColor(0x52AA, TFT_WHITE); // 灰蓝色
+  canvas.setCursor(winX + 10, winY + 25);
+  
+  String dispFileName = String(fName);
+  int maxTextW = winW - 20; // 窗口左右各留 10px 边距
+  if (canvas.textWidth(dispFileName) > maxTextW) {
+    while (dispFileName.length() > 0 && canvas.textWidth(dispFileName + "...") > maxTextW) {
+      // 逐字节安全回退，遇到 UTF-8 多字节字符的连续字节 (0x80~0xBF) 时持续向前回退
+      do {
+        dispFileName.remove(dispFileName.length() - 1);
+      } while (dispFileName.length() > 0 && ((uint8_t)dispFileName[dispFileName.length() - 1] & 0xC0) == 0x80);
+    }
+    dispFileName += "...";
+  }
+  canvas.print(dispFileName);
   
   // 动态进度条
   int barX = winX + 10;
-  int barY = winY + 38;
+  int barY = winY + 44;
   int barW = winW - 20; // 190 像素
-  int barH = 12;
+  int barH = 10;
   canvas.drawRect(barX, barY, barW, barH, TFT_BLACK);
   canvas.fillRect(barX + 1, barY + 1, barW - 2, barH - 2, 0xF7BE); // 浅灰背景
   
@@ -505,19 +517,19 @@ void onKMLProgressUpdate(int percent, int pointsLoaded, size_t bytesRead, size_t
   canvas.setTextColor(TFT_BLACK, TFT_WHITE);
   
   // 行1: 进度百分比与提取到的点数
-  canvas.setCursor(barX, barY + 16);
+  canvas.setCursor(barX, winY + 62);
   canvas.printf("Progress: %d%%", percent);
-  canvas.setCursor(barX + 90, barY + 16);
+  canvas.setCursor(barX + 90, winY + 62);
   canvas.printf("Points: %d", pointsLoaded);
   
   // 行2: 已读文件字节大小与剩余堆内存状态
-  canvas.setCursor(barX, barY + 28);
+  canvas.setCursor(barX, winY + 76);
   if (totalBytes > 0) {
     canvas.printf("Read: %dKB / %dKB", (int)(bytesRead / 1024), (int)(totalBytes / 1024));
   } else {
     canvas.printf("Read: %dKB", (int)(bytesRead / 1024));
   }
-  canvas.setCursor(barX + 115, barY + 28);
+  canvas.setCursor(barX + 115, winY + 76);
   canvas.printf("Mem: %dKB", (int)(esp_get_free_heap_size() / 1024));
   
   // 立即推送到屏幕
@@ -1522,10 +1534,20 @@ void loop() {
       menuOpenLogOutput = false;
     }
     
-    // 3D相机平滑阻尼过渡更新：如果相机正在进行阻尼平滑动画，持续触发重绘
+    // 相机平滑阻尼过渡更新：如果相机正在进行阻尼平滑动画，持续触发重绘
     if (currentViewMode == MODE_3D) {
       if (renderEngine.update3DCameraTransition()) {
         needRender = true;
+      }
+    } else if (currentViewMode == MODE_2D) {
+      if (renderEngine.update2DCameraTransition()) {
+        needRender = true;
+        // 如果处于自由平移模式，同步更新后的 panOffset 到 interactionManager
+        if (!renderEngine.isLocationLockedState()) {
+          int px, py;
+          renderEngine.getPanOffset(px, py);
+          interactionManager.setPanOffset(px, py);
+        }
       }
     }
     
@@ -3105,40 +3127,60 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             canvas.pushSprite(0, 0);
           }
         } else if ((key == '=' || key == '+') && currentMode == MODE_HIKEPOD) {
-          // 3D视图缩放 - 放大
-          if (currentViewMode == MODE_3D) {
-            static unsigned long lastEqualPress = 0;
-            const unsigned long EQUAL_DEBOUNCE_DELAY = 200;
-            
-            unsigned long currentTime = millis();
-            if (currentTime - lastEqualPress > EQUAL_DEBOUNCE_DELAY) {
-              renderEngine.zoom3D(1.2);  // 放大20%
-              lastEqualPress = currentTime;
+          // 视图缩放 - 放大 (+25%)
+          static unsigned long lastEqualPress = 0;
+          const unsigned long EQUAL_DEBOUNCE_DELAY = 150;
+          
+          unsigned long currentTime = millis();
+          if (currentTime - lastEqualPress > EQUAL_DEBOUNCE_DELAY) {
+            lastEqualPress = currentTime;
+            if (currentViewMode == MODE_3D) {
+              renderEngine.zoom3D(1.25f);
               Serial.println("3D Zoom in");
               if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
                 renderEngine.center3DOnLocation(currentLocation);
               }
-              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
-              canvas.pushSprite(0, 0);
+            } else if (currentViewMode == MODE_2D) {
+              float anchorLat = 0.0f, anchorLng = 0.0f;
+              if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
+                anchorLat = currentLocation.latitude;
+                anchorLng = currentLocation.longitude;
+              } else {
+                renderEngine.screenToLatLng(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, anchorLat, anchorLng);
+              }
+              renderEngine.zoom2D(1.25f, anchorLat, anchorLng);
+              Serial.println("2D Zoom in");
             }
+            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
+            canvas.pushSprite(0, 0);
           }
         } else if ((key == '-' || key == '_') && currentMode == MODE_HIKEPOD) {
-          // 3D视图缩放 - 缩小
-          if (currentViewMode == MODE_3D) {
-            static unsigned long lastMinusPress = 0;
-            const unsigned long MINUS_DEBOUNCE_DELAY = 200;
-            
-            unsigned long currentTime = millis();
-            if (currentTime - lastMinusPress > MINUS_DEBOUNCE_DELAY) {
-              renderEngine.zoom3D(0.8);  // 缩小20%
-              lastMinusPress = currentTime;
+          // 视图缩放 - 缩小 (-20%)
+          static unsigned long lastMinusPress = 0;
+          const unsigned long MINUS_DEBOUNCE_DELAY = 150;
+          
+          unsigned long currentTime = millis();
+          if (currentTime - lastMinusPress > MINUS_DEBOUNCE_DELAY) {
+            lastMinusPress = currentTime;
+            if (currentViewMode == MODE_3D) {
+              renderEngine.zoom3D(0.8f);
               Serial.println("3D Zoom out");
               if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
                 renderEngine.center3DOnLocation(currentLocation);
               }
-              renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
-              canvas.pushSprite(0, 0);
+            } else if (currentViewMode == MODE_2D) {
+              float anchorLat = 0.0f, anchorLng = 0.0f;
+              if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
+                anchorLat = currentLocation.latitude;
+                anchorLng = currentLocation.longitude;
+              } else {
+                renderEngine.screenToLatLng(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, anchorLat, anchorLng);
+              }
+              renderEngine.zoom2D(0.8f, anchorLat, anchorLng);
+              Serial.println("2D Zoom out");
             }
+            renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
+            canvas.pushSprite(0, 0);
           }
         } else if ((key == 'r' || key == 'R') && currentMode == MODE_HIKEPOD) {
           // 'r' 键切换 3D 旋转中心（起点 / 网格中心）

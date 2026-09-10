@@ -129,52 +129,17 @@ void InteractionManager::handleKeyboardInput(bool keyboardChanged, bool keyboard
       // 检测是否是初始按下
       bool isInitialPress = (keyboardChanged && keyboardPressed);
       
-      // 检测加号键（包括Shift+加号的情况）
-      bool plusPressed = false;
+      // 缩放由 main.cpp 中的 handleControls 统一进行 2D/3D 平滑连续缩放处理
+      // 此处专注于检测空格键、t键以及方向键平移
+      bool spaceFound = false;
+      bool tKeyFound = false;
       for (auto key : keys.word) {
-        if (key == '+' || key == '=') {  // 有些键盘上+和=是同一个键
-          plusPressed = true;
-          break;  // 找到一个就停止，避免重复触发
+        if (key == ' ') {
+          spaceFound = true;
+        } else if (key == 't') {
+          tKeyFound = true;
         }
       }
-      
-      // 检测减号键（包括Shift+-的_情况）
-      bool minusPressed = false;
-      if (!plusPressed) { // 如果已经检测到加号键，就不再检测减号键
-        for (auto key : keys.word) {
-          if (key == '-' || key == '_') {  // - 和 _ 都作为缩小
-            minusPressed = true;
-            break;  // 找到一个就停止，避免重复触发
-          }
-        }
-      }
-      
-      // 处理缩放操作
-      if (plusPressed) {
-        if (targetZoomLevel > 0) {  // 支持最多13个缩放级别（0-12）
-          targetZoomLevel--;  // 减小缩放级别 = 放大地图
-          zoomChanged = true;
-          isZoomAnimating = true;
-          //Serial.printf("[DEBUG] Plus/Equal key pressed, targetZoomLevel=%d\n", targetZoomLevel);
-        }
-      } else if (minusPressed) {
-        if (targetZoomLevel < 12) {
-          targetZoomLevel++;  // 增加缩放级别 = 缩小地图
-          zoomChanged = true;
-          isZoomAnimating = true;
-          //Serial.printf("[DEBUG] Minus key pressed, targetZoomLevel=%d\n", targetZoomLevel);
-        }
-      } else {
-        // 检测空格键
-        bool spaceFound = false;
-        bool tKeyFound = false;
-        for (auto key : keys.word) {
-          if (key == ' ') {
-            spaceFound = true;
-          } else if (key == 't') {
-            tKeyFound = true;
-          }
-        }
         if (spaceFound) {
           spaceKeyPressed = true;
           Serial.println("[DEBUG] Space key pressed");
@@ -229,7 +194,6 @@ void InteractionManager::handleKeyboardInput(bool keyboardChanged, bool keyboard
       }
     }
   }
-}
 
 bool InteractionManager::isSpaceKeyPressed() {
   return spaceKeyPressed;

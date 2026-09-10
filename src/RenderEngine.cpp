@@ -36,6 +36,11 @@ RenderEngine::RenderEngine() :
   viewCenterLat(39.9),
   viewCenterLng(116.4),
   pixelsPerMeter(0.01),
+  targetPixelsPerMeter(0.01),
+  zoomAnchorLat(0.0),
+  zoomAnchorLng(0.0),
+  floatPanX(0.0f),
+  floatPanY(0.0f),
   zoomLevel(8),  // 默认使用 ZOOM_5KM
   panOffsetX(0),
   panOffsetY(0),
@@ -108,6 +113,7 @@ void RenderEngine::begin(int width, int height) {
   screenWidth = width;
   screenHeight = height;
   updatePixelsPerMeter();
+  targetPixelsPerMeter = pixelsPerMeter;
 }
 
 void RenderEngine::setCanvas(M5Canvas* canvas) {
@@ -208,6 +214,13 @@ void RenderEngine::autoFitToRoute() {
   
   // 加上 20% 的余量
   double requiredWidth = maxSpan * 1.2;
+  if (requiredWidth < 5.0) requiredWidth = 5.0;
+
+  // 连续比例计算
+  pixelsPerMeter = (float)(screenWidth / requiredWidth);
+  targetPixelsPerMeter = pixelsPerMeter;
+  floatPanX = 0.0f;
+  floatPanY = 0.0f;
 
   // 寻找合适的缩放级别：找到第一个能容纳 requiredWidth 的级别
   int bestZoom = 12; // 默认最大宽度（最小缩放）
@@ -217,9 +230,7 @@ void RenderEngine::autoFitToRoute() {
       break;
     }
   }
-  
   zoomLevel = bestZoom;
-  updatePixelsPerMeter();
   
   Serial.print("=== RenderEngine: Auto-fit. MaxSpan=");
   Serial.print(maxSpan);
@@ -227,14 +238,15 @@ void RenderEngine::autoFitToRoute() {
   Serial.print(requiredWidth);
   Serial.print("m, Chosen Zoom=");
   Serial.print(zoomLevel);
-  Serial.print(" (Width: ");
-  Serial.print(ZOOM_VIEW_WIDTHS[zoomLevel]);
-  Serial.println("m)");
+  Serial.print(" (PPM: ");
+  Serial.print(pixelsPerMeter, 4);
+  Serial.println(")");
 }
 
 void RenderEngine::setZoomLevel(int level) {
   zoomLevel = constrain(level, 0, 12);
   updatePixelsPerMeter();
+  targetPixelsPerMeter = pixelsPerMeter;
 }
 
 int RenderEngine::getZoomLevel() {
@@ -244,6 +256,8 @@ int RenderEngine::getZoomLevel() {
 void RenderEngine::setPanOffset(int x, int y) {
   panOffsetX = x;
   panOffsetY = y;
+  floatPanX = (float)x;
+  floatPanY = (float)y;
 }
 
 void RenderEngine::render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount, const POI* poiPool, int poiCount, int showPOIsMode) {
@@ -560,6 +574,8 @@ void RenderEngine::centerOnLocation(float lat, float lng) {
   viewCenterLng = lng;
   panOffsetX = 0;
   panOffsetY = 0;
+  floatPanX = 0.0f;
+  floatPanY = 0.0f;
 }
 
 void RenderEngine::zoomAroundPoint(float lat, float lng, int newZoomLevel) {
@@ -578,6 +594,7 @@ void RenderEngine::zoomAroundPoint(float lat, float lng, int newZoomLevel) {
   
   zoomLevel = constrain(newZoomLevel, 0, 10);
   updatePixelsPerMeter();
+  targetPixelsPerMeter = pixelsPerMeter;
   
   // 计算新的 panOffset 以保持 lat/lng 在屏幕上的位置不变
   // newScreenX = screenCenterX + dx * pixelsPerMeter_new + panOffsetX_new
@@ -587,10 +604,77 @@ void RenderEngine::zoomAroundPoint(float lat, float lng, int newZoomLevel) {
   
   panOffsetX += (int)(dx * (oldPixelsPerMeter - pixelsPerMeter));
   panOffsetY -= (int)(dy * (oldPixelsPerMeter - pixelsPerMeter)); // 注意：y 轴 dx 是减号，dy 也是反向的
+  floatPanX = (float)panOffsetX;
+  floatPanY = (float)panOffsetY;
   
   // 调试日志
   Serial.printf("[ZOOM] zoomAroundPoint: zoom=%d, dx=%.2f, dy=%.2f, ppm_old=%.4f, ppm_new=%.4f, panX=%d, panY=%d\n", 
                 zoomLevel, dx, dy, oldPixelsPerMeter, pixelsPerMeter, panOffsetX, panOffsetY);
+}
+
+void RenderEngine::zoom2D(float factor, float anchorLat, float anchorLng) {
+  // 如果未指定锚点，默认使用屏幕中心经纬度
+  if (anchorLat == 0.0f && anchorLng == 0.0f) {
+    screenToLatLng(screenWidth / 2, screenHeight / 2, anchorLat, anchorLng);
+  }
+  zoomAnchorLat = anchorLat;
+  zoomAnchorLng = anchorLng;
+
+  if (targetPixelsPerMeter <= 0.00001f) {
+    targetPixelsPerMeter = (pixelsPerMeter > 0.00001f) ? pixelsPerMeter : 0.01f;
+  }
+
+  // 几何级数等比缩放
+  targetPixelsPerMeter *= factor;
+
+  // 限制缩放范围：最小 200km 视野，最大 3m 视野
+  const float MIN_PPM = 0.0012f; // 240 / 200000m
+  const float MAX_PPM = 80.0f;   // 240 / 3m
+  if (targetPixelsPerMeter < MIN_PPM) targetPixelsPerMeter = MIN_PPM;
+  if (targetPixelsPerMeter > MAX_PPM) targetPixelsPerMeter = MAX_PPM;
+
+  Serial.printf("[ZOOM 2D] factor=%.2f, currPPM=%.4f, targetPPM=%.4f, anchor=(%.6f, %.6f)\n",
+                factor, pixelsPerMeter, targetPixelsPerMeter, zoomAnchorLat, zoomAnchorLng);
+}
+
+bool RenderEngine::update2DCameraTransition() {
+  float diff = targetPixelsPerMeter - pixelsPerMeter;
+  if (fabsf(diff) > 0.000005f) {
+    float oldPpm = pixelsPerMeter;
+    // 阻尼逼近：每帧追赶 25% 差值，带来平滑丝滑缩放动画
+    pixelsPerMeter += diff * 0.25f;
+
+    // 当差值极小时直接对齐
+    if (fabsf(targetPixelsPerMeter - pixelsPerMeter) < 0.00001f) {
+      pixelsPerMeter = targetPixelsPerMeter;
+    }
+
+    // 维持缩放锚点在屏幕上的像素坐标不变
+    if (zoomAnchorLat != 0.0f || zoomAnchorLng != 0.0f) {
+      float dx, dy;
+      latLngToMeters(zoomAnchorLat, zoomAnchorLng, dx, dy);
+      floatPanX += dx * (oldPpm - pixelsPerMeter);
+      floatPanY -= dy * (oldPpm - pixelsPerMeter);
+      panOffsetX = (int)roundf(floatPanX);
+      panOffsetY = (int)roundf(floatPanY);
+    }
+
+    // 动态同步离散 zoomLevel 供旧逻辑读取
+    if (pixelsPerMeter > 0.00001f) {
+      float currentViewWidth = (float)screenWidth / pixelsPerMeter;
+      int bestZoom = 12;
+      for (int i = 0; i <= 12; i++) {
+        if (ZOOM_VIEW_WIDTHS[i] >= currentViewWidth) {
+          bestZoom = i;
+          break;
+        }
+      }
+      zoomLevel = bestZoom;
+    }
+
+    return true; // 正在平滑过渡动画中，通知主循环持续刷新
+  }
+  return false;
 }
 
 void RenderEngine::setGNSSModule(GNSSModule* module) {
@@ -954,28 +1038,24 @@ void RenderEngine::drawScaleBar() {
   int x = screenWidth - 70;
   int y = screenHeight - CHART_HEIGHT - 15;
   
-  // 固定比例尺线段的像素长度（保持视觉上的一致性）
+  // 固定比例尺线段的目标基准像素长度
   const int MAX_SCALE_PIXEL_LENGTH = 50;
   
-  // 根据当前缩放级别获取视图宽度
-  int zoomIndex = constrain(zoomLevel, 0, 10);  // zoomLevel 直接对应枚举值（0-10）
-  double viewWidthMeters = ZOOM_VIEW_WIDTHS[zoomIndex];
-  
-  // 计算当前的像素/米转换比例
-  double pixelsPerMeter = (double)screenWidth / viewWidthMeters;
+  // 直接使用当前的平滑 pixelsPerMeter 转换比例
+  double ppm = (double)this->pixelsPerMeter;
+  if (ppm <= 0.000001) ppm = 0.000001;
   
   // 计算固定像素长度对应的实际距离（米）
-  double scaleMeters = MAX_SCALE_PIXEL_LENGTH / pixelsPerMeter;
+  double scaleMeters = MAX_SCALE_PIXEL_LENGTH / ppm;
   
-  // 规范化比例尺距离为"好看"的数值（如 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000 等）
-  // 找到最接近的数值
-  double niceScales[] = {1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 25000};
-  int niceScaleCount = 15;
+  // 规范化比例尺距离为整洁易读的数值
+  const double niceScales[] = {1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000};
+  const int niceScaleCount = sizeof(niceScales) / sizeof(niceScales[0]);
   double bestScale = niceScales[0];
-  double minDiff = abs(scaleMeters - niceScales[0]);
+  double minDiff = fabs(scaleMeters - niceScales[0]);
   
   for (int i = 1; i < niceScaleCount; i++) {
-    double diff = abs(scaleMeters - niceScales[i]);
+    double diff = fabs(scaleMeters - niceScales[i]);
     if (diff < minDiff) {
       minDiff = diff;
       bestScale = niceScales[i];
@@ -984,26 +1064,26 @@ void RenderEngine::drawScaleBar() {
   scaleMeters = bestScale;
   
   // 根据规范化后的距离，重新计算像素长度
-  double scalePixelLength = scaleMeters * pixelsPerMeter;
+  double scalePixelLength = scaleMeters * ppm;
   
   // 确保线段不会超出屏幕右侧边界
   int maxAllowedLength = screenWidth - x - 10; // 留出10像素的边距
   if (scalePixelLength > maxAllowedLength) {
     scalePixelLength = maxAllowedLength;
     // 重新计算对应的距离
-    scaleMeters = scalePixelLength / pixelsPerMeter;
+    scaleMeters = scalePixelLength / ppm;
     // 再次规范化
-    minDiff = abs(scaleMeters - niceScales[0]);
+    minDiff = fabs(scaleMeters - niceScales[0]);
     bestScale = niceScales[0];
     for (int i = 1; i < niceScaleCount; i++) {
-      double diff = abs(scaleMeters - niceScales[i]);
+      double diff = fabs(scaleMeters - niceScales[i]);
       if (diff < minDiff) {
         minDiff = diff;
         bestScale = niceScales[i];
       }
     }
     scaleMeters = bestScale;
-    scalePixelLength = scaleMeters * pixelsPerMeter;
+    scalePixelLength = scaleMeters * ppm;
   }
   
   // 绘制刻度线（使用计算出的像素长度）
