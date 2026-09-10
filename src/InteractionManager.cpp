@@ -140,60 +140,16 @@ void InteractionManager::handleKeyboardInput(bool keyboardChanged, bool keyboard
           tKeyFound = true;
         }
       }
-        if (spaceFound) {
-          spaceKeyPressed = true;
-          Serial.println("[DEBUG] Space key pressed");
-        } else if (tKeyFound) {
-          tKeyPressed = true;
-          Serial.println("[DEBUG] T key pressed");
-        } else {
-          // 只有在没有检测到缩放键、空格键和t键时，才处理方向键
-          // 其他方向控制 - 直接使用keys.word来检测按键
-          for (auto key : keys.word) {
-            int panDistance = isInitialPress ? 15 : 6; // 单次按键平移距离为15，长按为6（增加移动距离）
-            
-            if (key == ';') {
-              targetPanOffsetY += panDistance; // 上键：分号 - 反转：向上移动内容
-              isPanAnimating = true;
-              panChanged = true;
-              static bool panUpLogged = false;
-              if (!panUpLogged) {
-                Serial.println("[PAN DEBUG] Pan up");
-                panUpLogged = true;
-              }
-            } else if (key == '.') {
-              targetPanOffsetY -= panDistance; // 下键：句号 - 反转：向下移动内容
-              isPanAnimating = true;
-              panChanged = true;
-              static bool panDownLogged = false;
-              if (!panDownLogged) {
-                Serial.println("[PAN DEBUG] Pan down");
-                panDownLogged = true;
-              }
-            } else if (key == ',') {
-              targetPanOffsetX += panDistance; // 左键：逗号 - 反转：向左移动内容
-              isPanAnimating = true;
-              panChanged = true;
-              static bool panLeftLogged = false;
-              if (!panLeftLogged) {
-                Serial.println("[PAN DEBUG] Pan left");
-                panLeftLogged = true;
-              }
-            } else if (key == '/') {
-              targetPanOffsetX -= panDistance; // 右键：斜杠 - 反转：向右移动内容
-              isPanAnimating = true;
-              panChanged = true;
-              static bool panRightLogged = false;
-              if (!panRightLogged) {
-                Serial.println("[PAN DEBUG] Pan right");
-                panRightLogged = true;
-              }
-            }
-          }
-        }
+      if (spaceFound) {
+        spaceKeyPressed = true;
+        Serial.println("[DEBUG] Space key pressed");
+      } else if (tKeyFound) {
+        tKeyPressed = true;
+        Serial.println("[DEBUG] T key pressed");
       }
     }
   }
+}
 
 bool InteractionManager::isSpaceKeyPressed() {
   return spaceKeyPressed;

@@ -517,19 +517,21 @@ void onKMLProgressUpdate(int percent, int pointsLoaded, size_t bytesRead, size_t
   canvas.setTextColor(TFT_BLACK, TFT_WHITE);
   
   // 行1: 进度百分比与提取到的点数
-  canvas.setCursor(barX, winY + 62);
+  canvas.setCursor(barX, winY + 60);
   canvas.printf("Progress: %d%%", percent);
-  canvas.setCursor(barX + 90, winY + 62);
+  canvas.setCursor(barX + 95, winY + 60);
   canvas.printf("Points: %d", pointsLoaded);
   
-  // 行2: 已读文件字节大小与剩余堆内存状态
-  canvas.setCursor(barX, winY + 76);
+  // 行2: 已读文件字节大小
+  canvas.setCursor(barX, winY + 74);
   if (totalBytes > 0) {
     canvas.printf("Read: %dKB / %dKB", (int)(bytesRead / 1024), (int)(totalBytes / 1024));
   } else {
     canvas.printf("Read: %dKB", (int)(bytesRead / 1024));
   }
-  canvas.setCursor(barX + 115, winY + 76);
+  
+  // 行3: 独立显示剩余堆内存状态
+  canvas.setCursor(barX, winY + 88);
   canvas.printf("Mem: %dKB", (int)(esp_get_free_heap_size() / 1024));
   
   // 立即推送到屏幕
@@ -3141,14 +3143,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                 renderEngine.center3DOnLocation(currentLocation);
               }
             } else if (currentViewMode == MODE_2D) {
-              float anchorLat = 0.0f, anchorLng = 0.0f;
-              if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
-                anchorLat = currentLocation.latitude;
-                anchorLng = currentLocation.longitude;
-              } else {
-                renderEngine.screenToLatLng(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, anchorLat, anchorLng);
-              }
-              renderEngine.zoom2D(1.25f, anchorLat, anchorLng);
+              renderEngine.zoom2D(1.25f);
               Serial.println("2D Zoom in");
             }
             renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
@@ -3169,14 +3164,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                 renderEngine.center3DOnLocation(currentLocation);
               }
             } else if (currentViewMode == MODE_2D) {
-              float anchorLat = 0.0f, anchorLng = 0.0f;
-              if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
-                anchorLat = currentLocation.latitude;
-                anchorLng = currentLocation.longitude;
-              } else {
-                renderEngine.screenToLatLng(SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2, anchorLat, anchorLng);
-              }
-              renderEngine.zoom2D(0.8f, anchorLat, anchorLng);
+              renderEngine.zoom2D(0.8f);
               Serial.println("2D Zoom out");
             }
             renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
@@ -3197,19 +3185,31 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             }
           }
         } else if ((key == ';' || key == '.' || key == ',' || key == '/') && currentMode == MODE_HIKEPOD) {
-          // 方向键用于3D视图平移（仅当没有菜单打开时）
-          if (currentViewMode == MODE_3D && !settingsMenuOpen && !fileSelectionMenuOpen) {
-            const int PAN_STEP = 10;
-            if (key == ';') { // 上箭头
-              renderEngine.pan3D(0, PAN_STEP);
-            } else if (key == '.') { // 下箭头
-              renderEngine.pan3D(0, -PAN_STEP);
-            } else if (key == '/') { // 右箭头
-              renderEngine.pan3D(-PAN_STEP, 0);
-            } else if (key == ',') { // 左箭头
-              renderEngine.pan3D(PAN_STEP, 0);
+          // 方向键用于 2D/3D 视图平移（仅当没有菜单打开时）
+          if (!settingsMenuOpen && !fileSelectionMenuOpen && !openMenu && !helpMenuVisible) {
+            const int PAN_STEP = 15;
+            if (currentViewMode == MODE_3D) {
+              if (key == ';') { // 上
+                renderEngine.pan3D(0, PAN_STEP);
+              } else if (key == '.') { // 下
+                renderEngine.pan3D(0, -PAN_STEP);
+              } else if (key == '/') { // 右
+                renderEngine.pan3D(-PAN_STEP, 0);
+              } else if (key == ',') { // 左
+                renderEngine.pan3D(PAN_STEP, 0);
+              }
+            } else if (currentViewMode == MODE_2D) {
+              if (key == ';') { // 上
+                renderEngine.pan2D(0, PAN_STEP);
+              } else if (key == '.') { // 下
+                renderEngine.pan2D(0, -PAN_STEP);
+              } else if (key == ',') { // 左
+                renderEngine.pan2D(PAN_STEP, 0);
+              } else if (key == '/') { // 右
+                renderEngine.pan2D(-PAN_STEP, 0);
+              }
             }
-            // 3D手动平移后解除锁定，允许自由浏览
+            // 手动平移后解除锁定，允许自由浏览
             renderEngine.setLocationLocked(false);
             hasUserPanned = true;
 

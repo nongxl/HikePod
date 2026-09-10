@@ -41,6 +41,8 @@ RenderEngine::RenderEngine() :
   zoomAnchorLng(0.0),
   floatPanX(0.0f),
   floatPanY(0.0f),
+  targetPanOffsetX(0.0f),
+  targetPanOffsetY(0.0f),
   zoomLevel(8),  // 默认使用 ZOOM_5KM
   panOffsetX(0),
   panOffsetY(0),
@@ -58,7 +60,7 @@ RenderEngine::RenderEngine() :
   autoPanTargetOffsetY(0),  // 初始化为0
   // 3D渲染相关初始化
   viewMode(MODE_2D),
-  verticalExaggeration(3.0),
+  verticalExaggeration(1.5f),
   cameraDistance(500.0),
   scaleFactor(1.0),
   targetScaleFactor(1.0),
@@ -221,6 +223,8 @@ void RenderEngine::autoFitToRoute() {
   targetPixelsPerMeter = pixelsPerMeter;
   floatPanX = 0.0f;
   floatPanY = 0.0f;
+  targetPanOffsetX = 0.0f;
+  targetPanOffsetY = 0.0f;
 
   // 寻找合适的缩放级别：找到第一个能容纳 requiredWidth 的级别
   int bestZoom = 12; // 默认最大宽度（最小缩放）
@@ -258,6 +262,13 @@ void RenderEngine::setPanOffset(int x, int y) {
   panOffsetY = y;
   floatPanX = (float)x;
   floatPanY = (float)y;
+  targetPanOffsetX = (float)x;
+  targetPanOffsetY = (float)y;
+}
+
+void RenderEngine::pan2D(float dx, float dy) {
+  targetPanOffsetX += dx;
+  targetPanOffsetY += dy;
 }
 
 void RenderEngine::render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints, bool sdInitialized, bool hasRoute, const Location* pointPool, int pointCount, const POI* poiPool, int poiCount, int showPOIsMode) {
@@ -275,9 +286,6 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
     centerOnLocation(currentLocation.latitude, currentLocation.longitude);
   }
 
-  // 更新统一的缩放参数（确保使用最新的缩放级别）
-  updatePixelsPerMeter();
-  
   // 清空canvas
   canvas->fillScreen(TFT_WHITE);
   // 确保canvas的颜色模式正确
@@ -576,6 +584,8 @@ void RenderEngine::centerOnLocation(float lat, float lng) {
   panOffsetY = 0;
   floatPanX = 0.0f;
   floatPanY = 0.0f;
+  targetPanOffsetX = 0.0f;
+  targetPanOffsetY = 0.0f;
 }
 
 void RenderEngine::zoomAroundPoint(float lat, float lng, int newZoomLevel) {
@@ -596,30 +606,18 @@ void RenderEngine::zoomAroundPoint(float lat, float lng, int newZoomLevel) {
   updatePixelsPerMeter();
   targetPixelsPerMeter = pixelsPerMeter;
   
-  // 计算新的 panOffset 以保持 lat/lng 在屏幕上的位置不变
-  // newScreenX = screenCenterX + dx * pixelsPerMeter_new + panOffsetX_new
-  // oldScreenX = screenCenterX + dx * pixelsPerMeter_old + panOffsetX_old
-  // 我们要求 newScreenX = oldScreenX
-  // panOffsetX_new = panOffsetX_old + dx * (pixelsPerMeter_old - pixelsPerMeter_new)
-  
   panOffsetX += (int)(dx * (oldPixelsPerMeter - pixelsPerMeter));
-  panOffsetY -= (int)(dy * (oldPixelsPerMeter - pixelsPerMeter)); // 注意：y 轴 dx 是减号，dy 也是反向的
+  panOffsetY -= (int)(dy * (oldPixelsPerMeter - pixelsPerMeter));
   floatPanX = (float)panOffsetX;
   floatPanY = (float)panOffsetY;
+  targetPanOffsetX = floatPanX;
+  targetPanOffsetY = floatPanY;
   
-  // 调试日志
   Serial.printf("[ZOOM] zoomAroundPoint: zoom=%d, dx=%.2f, dy=%.2f, ppm_old=%.4f, ppm_new=%.4f, panX=%d, panY=%d\n", 
                 zoomLevel, dx, dy, oldPixelsPerMeter, pixelsPerMeter, panOffsetX, panOffsetY);
 }
 
 void RenderEngine::zoom2D(float factor, float anchorLat, float anchorLng) {
-  // 如果未指定锚点，默认使用屏幕中心经纬度
-  if (anchorLat == 0.0f && anchorLng == 0.0f) {
-    screenToLatLng(screenWidth / 2, screenHeight / 2, anchorLat, anchorLng);
-  }
-  zoomAnchorLat = anchorLat;
-  zoomAnchorLng = anchorLng;
-
   if (targetPixelsPerMeter <= 0.00001f) {
     targetPixelsPerMeter = (pixelsPerMeter > 0.00001f) ? pixelsPerMeter : 0.01f;
   }
@@ -633,30 +631,33 @@ void RenderEngine::zoom2D(float factor, float anchorLat, float anchorLng) {
   if (targetPixelsPerMeter < MIN_PPM) targetPixelsPerMeter = MIN_PPM;
   if (targetPixelsPerMeter > MAX_PPM) targetPixelsPerMeter = MAX_PPM;
 
-  Serial.printf("[ZOOM 2D] factor=%.2f, currPPM=%.4f, targetPPM=%.4f, anchor=(%.6f, %.6f)\n",
-                factor, pixelsPerMeter, targetPixelsPerMeter, zoomAnchorLat, zoomAnchorLng);
+  Serial.printf("[ZOOM 2D] factor=%.2f, currPPM=%.4f, targetPPM=%.4f\n",
+                factor, pixelsPerMeter, targetPixelsPerMeter);
 }
 
 bool RenderEngine::update2DCameraTransition() {
-  float diff = targetPixelsPerMeter - pixelsPerMeter;
-  if (fabsf(diff) > 0.000005f) {
+  bool isTransitioning = false;
+
+  // 1. 缩放平滑阻尼逼近 (Lerp)
+  float scaleDiff = targetPixelsPerMeter - pixelsPerMeter;
+  if (fabsf(scaleDiff) > 0.000005f) {
     float oldPpm = pixelsPerMeter;
     // 阻尼逼近：每帧追赶 25% 差值，带来平滑丝滑缩放动画
-    pixelsPerMeter += diff * 0.25f;
+    pixelsPerMeter += scaleDiff * 0.25f;
 
-    // 当差值极小时直接对齐
     if (fabsf(targetPixelsPerMeter - pixelsPerMeter) < 0.00001f) {
       pixelsPerMeter = targetPixelsPerMeter;
     }
 
-    // 维持缩放锚点在屏幕上的像素坐标不变
-    if (zoomAnchorLat != 0.0f || zoomAnchorLng != 0.0f) {
-      float dx, dy;
-      latLngToMeters(zoomAnchorLat, zoomAnchorLng, dx, dy);
-      floatPanX += dx * (oldPpm - pixelsPerMeter);
-      floatPanY -= dy * (oldPpm - pixelsPerMeter);
-      panOffsetX = (int)roundf(floatPanX);
-      panOffsetY = (int)roundf(floatPanY);
+    // 屏幕中心对齐几何放缩：
+    // 以屏幕中心为基准缩放时，原点相对于屏幕中心的偏移按 pixelsPerMeter 的比例同比例伸缩。
+    // 在定位锁定跟随状态下 floatPanX/Y 为 0，乘任何比率恒为 0，定位点绝对稳定居中，绝无漂移！
+    if (oldPpm > 0.000001f) {
+      float ratio = pixelsPerMeter / oldPpm;
+      floatPanX *= ratio;
+      floatPanY *= ratio;
+      targetPanOffsetX *= ratio;
+      targetPanOffsetY *= ratio;
     }
 
     // 动态同步离散 zoomLevel 供旧逻辑读取
@@ -672,9 +673,27 @@ bool RenderEngine::update2DCameraTransition() {
       zoomLevel = bestZoom;
     }
 
-    return true; // 正在平滑过渡动画中，通知主循环持续刷新
+    isTransitioning = true;
   }
-  return false;
+
+  // 2. 平移平滑阻尼逼近 (Lerp)，带来丝滑的惯性滑行手感
+  float panDx = targetPanOffsetX - floatPanX;
+  float panDy = targetPanOffsetY - floatPanY;
+  if (fabsf(panDx) > 0.3f || fabsf(panDy) > 0.3f) {
+    floatPanX += panDx * 0.35f;
+    floatPanY += panDy * 0.35f;
+    panOffsetX = (int)roundf(floatPanX);
+    panOffsetY = (int)roundf(floatPanY);
+    isTransitioning = true;
+  } else if (floatPanX != targetPanOffsetX || floatPanY != targetPanOffsetY) {
+    floatPanX = targetPanOffsetX;
+    floatPanY = targetPanOffsetY;
+    panOffsetX = (int)roundf(floatPanX);
+    panOffsetY = (int)roundf(floatPanY);
+    isTransitioning = true;
+  }
+
+  return isTransitioning;
 }
 
 void RenderEngine::setGNSSModule(GNSSModule* module) {

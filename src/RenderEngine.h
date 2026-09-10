@@ -60,9 +60,10 @@ public:
   // 基于中心点缩放
   void zoomAroundPoint(float lat, float lng, int newZoomLevel);
   
-  // 2D 连续平滑缩放
+  // 2D 连续平滑缩放与平滑平移
   void zoom2D(float factor, float anchorLat = 0.0f, float anchorLng = 0.0f);
-  bool update2DCameraTransition(); // 2D平滑过渡更新（阻尼缩放与锚点补偿），返回是否有动画正在进行
+  void pan2D(float dx, float dy); // 2D 阻尼平移动画
+  bool update2DCameraTransition(); // 2D平滑过渡更新（阻尼缩放与阻尼平移），返回是否有动画正在进行
   
   // 渲染整个界面
   void render(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0, const POI* poiPool = nullptr, int poiCount = 0, int showPOIsMode = 0);
@@ -182,6 +183,8 @@ private:
   float zoomAnchorLng;    // 缩放锚点经度
   float floatPanX;        // 浮点精度的平移X偏移
   float floatPanY;        // 浮点精度的平移Y偏移
+  float targetPanOffsetX; // 目标平移X偏移（阻尼插值平滑）
+  float targetPanOffsetY; // 目标平移Y偏移（阻尼插值平滑）
   
   // 缩放和平移
   int zoomLevel;
