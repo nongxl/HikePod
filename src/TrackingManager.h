@@ -5,6 +5,14 @@
 #include <FS.h>
 #include "GNSSModule.h"
 
+// 途经标注点结构体（对齐两步路规范）
+struct TrackWaypoint {
+  String name;
+  Location loc;
+  String timeStr;
+  uint64_t timeMs;
+};
+
 class TrackingManager {
 public:
   TrackingManager();
@@ -15,10 +23,10 @@ public:
   // 设置GNSS模块引用
   void setGNSSModule(GNSSModule* gnss);
   
-  // 启动跟踪
-  bool startTracking();
+  // 启动跟踪（可传入自定义文件名前缀）
+  bool startTracking(const String& customPrefix = "");
   
-  // 停止跟踪
+  // 停止跟踪并生成标准KML
   void stopTracking();
   
   // 检查是否正在跟踪
@@ -30,6 +38,17 @@ public:
   // 获取已记录的轨迹点
   const std::vector<Location>& getTrackPoints() const;
   
+  // 添加标注点 (POI)
+  bool addWaypoint(const String& name, const Location& loc);
+  
+  // 获取已记录的标注点列表
+  const std::vector<TrackWaypoint>& getWaypoints() const;
+  
+  // 获取统计数据
+  double getTotalDistance() const { return totalDistance; }
+  double getElevationGain() const { return elevationGain; }
+  double getElevationLoss() const { return elevationLoss; }
+  
   // 清除轨迹数据
   void clearTrack();
   
@@ -40,14 +59,22 @@ private:
   // GNSS模块引用
   GNSSModule* gnssModule;
   
-  // 轨迹文件
-  File trackFile;
-  
-  // 轨迹文件名
+  // 轨迹文件名与临时坐标文件
   String trackFileName;
+  String tempCoordFileName;
+  File tempCoordFile;
   
-  // 已记录的轨迹点
+  // 已记录的轨迹点和标注点
   std::vector<Location> trackPoints;
+  std::vector<TrackWaypoint> waypoints;
+  
+  // 统计数据
+  double totalDistance;
+  double elevationGain;
+  double elevationLoss;
+  unsigned long trackingStartTimeMs;
+  String beginTimeIso;
+  uint64_t beginTimeEpochMs;
   
   // 上一个记录点
   Location lastRecordedPoint;
@@ -58,28 +85,17 @@ private:
   // 轨迹点索引
   int trackPointIndex;
   
-  // 检查是否应该记录新点
+  // 辅助函数
   bool shouldRecordPoint(const Location& currentLocation) const;
-  
-  // 计算两点之间的距离（米）
   double calculateDistance(const Location& p1, const Location& p2) const;
+  String generateKMLFileName(const String& customPrefix = "") const;
+  String getIsoTimeString() const;
+  uint64_t getEpochTimeMs() const;
   
-  // 生成KML文件名
-  String generateKMLFileName() const;
+  // 生成并写入最终的两步路标准KML文件
+  void generateFinalKML();
   
-  // 初始化KML文件
-  bool initializeKMLFile();
-  
-  // 写入KML文件头
-  void writeKMLHeader();
-  
-  // 写入轨迹点
-  void writeTrackPoint(const Location& location);
-  
-  // 写入KML文件尾
-  void writeKMLFooter();
-  
-  // 确保tracks目录存在
+  // 确保目录存在
   void ensureTracksDirectoryExists();
 };
 

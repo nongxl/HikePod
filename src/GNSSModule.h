@@ -9,11 +9,13 @@ struct Location {
   float latitude;
   float longitude;
   float altitude;
+  float course; // 航向角（0-360度，正北为0，顺时针），-1表示无效
+  float speed;  // 速度（km/h）
   bool isValid;
   
-  Location() : latitude(0), longitude(0), altitude(0), isValid(false) {}
-  Location(double lat, double lng, double alt = 0) : 
-    latitude((float)lat), longitude((float)lng), altitude((float)alt), isValid(true) {}
+  Location() : latitude(0), longitude(0), altitude(0), course(-1.0f), speed(0.0f), isValid(false) {}
+  Location(double lat, double lng, double alt = 0, float crs = -1.0f, float spd = 0.0f) : 
+    latitude((float)lat), longitude((float)lng), altitude((float)alt), course(crs), speed(spd), isValid(true) {}
 };
 
 class GNSSModule {

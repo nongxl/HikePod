@@ -42,10 +42,14 @@ bool GNSSModule::update() {
       if (gps.encode(gpsSerial.read())) {
         gpsSentences++;
         if (gps.location.isValid()) {
+          float crs = gps.course.isValid() ? (float)gps.course.deg() : -1.0f;
+          float spd = gps.speed.isValid() ? (float)gps.speed.kmph() : 0.0f;
           currentLocation = Location(
             gps.location.lat(),
             gps.location.lng(),
-            gps.altitude.isValid() ? gps.altitude.meters() : 0
+            gps.altitude.isValid() ? gps.altitude.meters() : 0,
+            crs,
+            spd
           );
           updated = true;
         } else {

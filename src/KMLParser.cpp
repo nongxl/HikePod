@@ -4,16 +4,26 @@
 #include <algorithm>
 
 KMLParser::KMLParser() {
-  // 初始化内存池 (使用 std::nothrow 防止内存分配失败导致系统崩溃)
-  pointPool = new (std::nothrow) Location[MAX_POINTS];
+  // 阶梯式自适应分配内存池（从 3500 递减到 1500，约 84KB ~ 36KB）
+  // 确保在各种堆内存碎片化场景下均能 100% 成功分配
+  const int candidatePoints[] = {3500, 3000, 2500, 2000, 1500};
+  pointPool = nullptr;
+  maxPoints = 0;
+  for (int pts : candidatePoints) {
+    pointPool = new (std::nothrow) Location[pts];
+    if (pointPool != nullptr) {
+      maxPoints = pts;
+      Serial.printf("=== KML Parser: Memory pool initialized with %d locations (%d bytes)\n", maxPoints, (int)(maxPoints * sizeof(Location)));
+      break;
+    }
+  }
+  
   currentPointCount = 0;
   downsampleRate = 1;      // 默认不采样
   rawPointCounter = 0;
   poiCount = 0;
   
-  if (pointPool != nullptr) {
-    Serial.println("=== KML Parser: Memory pool initialized with " + String(MAX_POINTS) + " locations");
-  } else {
+  if (pointPool == nullptr) {
     Serial.println("=== KML Parser: CRITICAL - Memory pool allocation failed!");
   }
 }
@@ -44,10 +54,10 @@ bool KMLParser::addPointToPool(double lat, double lng, double alt) {
 
   if (pointPool == nullptr) return false;
   
-  if (currentPointCount >= MAX_POINTS) {
+  if (currentPointCount >= maxPoints) {
     // 只有在第一次达到上限时输出日志
-    if (currentPointCount == MAX_POINTS) {
-      Serial.println("=== KML Parser: Memory pool full (" + String(MAX_POINTS) + "), skipping further points");
+    if (currentPointCount == maxPoints) {
+      Serial.println("=== KML Parser: Memory pool full (" + String(maxPoints) + "), skipping further points");
     }
     return false;
   }
@@ -113,12 +123,12 @@ bool KMLParser::parseFileDirect(const char* filePath) {
   Serial.println("=== KML Parser: Streaming file size: " + String(fileSize) + " bytes");
   
   int estimatedPoints = fileSize / 45;
-  if (estimatedPoints > MAX_POINTS) {
-    downsampleRate = (estimatedPoints / MAX_POINTS) + 1;
+  if (maxPoints > 0 && estimatedPoints > maxPoints) {
+    downsampleRate = (estimatedPoints / maxPoints) + 1;
     Serial.println("=== KML Parser: Streaming auto downsample rate: " + String(downsampleRate));
   } else {
     downsampleRate = 1;
-    Serial.println("=== KML Parser: Loading all points (estimated " + String(estimatedPoints) + " < " + String(MAX_POINTS) + ")");
+    Serial.println("=== KML Parser: Loading all points (estimated " + String(estimatedPoints) + " < " + String(maxPoints) + ")");
   }
   rawPointCounter = 0;
   currentPointCount = 0;
@@ -368,7 +378,7 @@ String KMLParser::getRouteName() {
 }
 
 bool KMLParser::isMemoryFull() {
-  return currentPointCount >= MAX_POINTS;
+  return maxPoints > 0 && currentPointCount >= maxPoints;
 }
 
 Location KMLParser::getStartPoint() {

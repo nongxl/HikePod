@@ -19,6 +19,11 @@
 #include <M5GFX.h>
 #include <WiFi.h>
 #include "WiFiManager.h"
+#include "USB.h"
+#include "USBMSC.h"
+#include "IME/IME.h"
+#include "I18n.h"
+
 
 // 创建独立的 SPI 对象
 SPIClass sdSPI;
@@ -32,6 +37,15 @@ SPIClass sdSPI;
 
 // 离屏渲染精灵对象
 M5Canvas canvas(&M5Cardputer.Display);
+
+// 语言适配字体助手
+inline void setUiFont() {
+  if (I18n::getInstance().isChinese()) {
+    canvas.setFont(&fonts::efontCN_12);
+  } else {
+    canvas.setFont(&fonts::Font0);
+  }
+}
 
 // 全局对象
 GNSSModule gnssModule;
@@ -85,18 +99,28 @@ void handleKeys(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::Keys
 void handleGPSInfoKeys(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::KeysState keys);
 void showGPSNoFixAlert();
 void showKMLFullAlert();
+void showNotTrackingAlert();
 void drawHikePodHelpMenu(bool should_I);
 void drawSettingsMenu(bool should_I);
 void drawConfig(bool should_I);
 void drawHelp(bool should_I);
 void drawInfo(bool should_I);
 void drawHttpServerWindow(bool should_I);
+void enterUsbMscMode();
+void drawWaypointInputDialog(bool should_I);
+void drawTextInputDialog(bool should_I);
+void showStatusToast(const String& msg);
+void showNotTrackingAlert();
+bool initSDCard();
 // void initHttpServer(); // 移除旧函数
 // void stopHttpServer(); // 移除旧函数
 
 // SD卡状态
 bool sdInitialized = false;
 bool hasRoute = false;
+
+// 地图浏览与跟随状态
+static bool hasUserPanned = false;  // 跟踪用户是否已手动平移操作过地图
 
 // 当前位置
 Location currentLocation;
@@ -150,9 +174,12 @@ const int POWER_MENU_OPTIONS = 3; // 省电选项数量
 bool settingsMenuOpen = false; // 设置菜单是否打开
 bool gpsNoFixAlertVisible = false; // GPS未定位提示信息框是否可见
 bool kmlFullAlertVisible = false; // KML点数达到上限提示信息框是否可见
+bool notTrackingAlertVisible = false; // 未在记录中提示信息框是否可见
 bool helpMenuVisible = false; // 帮助菜单是否可见
 int settingsMenuSelection = 0; // 当前选中的设置选项
-const int SETTINGS_MENU_OPTIONS = 6; // 设置选项数量（文件 + 亮度 + 超时 + 2个频率 + POI开关）
+int settingsMenuScrollOffset = 0; // 设置菜单滚动视口起始项索引
+const int SETTINGS_VISIBLE_ITEMS = 4; // 设置菜单可视项数量
+const int SETTINGS_MENU_OPTIONS = 7; // 设置选项数量（文件 + 亮度 + 超时 + 2个频率 + POI开关 + 语言）
 String currentKmlFile = ""; // 当前加载的 KML 文件名
 int showPOIsMode = 2;      // 关键点显示模式 (0:OFF, 1:ON, 2:AUTO)
 
@@ -160,6 +187,36 @@ int showPOIsMode = 2;      // 关键点显示模式 (0:OFF, 1:ON, 2:AUTO)
 bool httpServerMenuOpen = false;
 // WebServer server(80); // 已移除
 // String httpStatusMsg = ""; // 已移除
+
+// USB MSC 文件传输模式标志与对象
+bool usbMscModeOpen = false;
+USBMSC msc;
+static uint32_t usbReadCount = 0;
+static uint32_t usbWriteCount = 0;
+static uint64_t mscCardSizeMB = 0;
+
+// 通用文本输入法弹窗状态
+enum InputDialogType {
+  INPUT_NONE = 0,
+  INPUT_WAYPOINT_POI,        // 按 i 插入途经点
+  INPUT_TRACKING_FILENAME,   // 按 t 开始记录自定义轨迹名
+  INPUT_RENAME_KML           // 列表按 r 重命名 KML
+};
+InputDialogType currentInputType = INPUT_NONE;
+bool inputDialogOpen = false;
+#define waypointInputOpen inputDialogOpen
+String inputDialogText = "";
+#define waypointInputText inputDialogText
+String inputDialogTitle = "";
+String inputDialogOriginalFile = ""; // 重命名时的原文件名
+unsigned long statusToastTime = 0;
+String statusToastText = "";
+
+void openTextInputDialog(InputDialogType type, const String& title, const String& defaultText = "", const String& origFile = "");
+void showStatusToast(const String& msg) {
+  statusToastText = msg;
+  statusToastTime = millis();
+}
 
 // 模式定义
 enum AppMode {
@@ -253,6 +310,7 @@ bool fileSelectionMenuOpen = false;
 int selectedFileIndex = 0;
 std::vector<String> kmlFileList;
 bool menuJustOpened = false; // 用于跟踪文件选择菜单是否刚刚打开
+unsigned long lastFileMenuActionTime = 0; // 文件选择菜单操作时间戳，防止 Enter 穿透
 
 // Cardputer_GPS_Info 相关变量
 
@@ -331,7 +389,7 @@ void drawFileSelectionMenu() {
   canvas.setFont(&fonts::efontCN_12);
   canvas.setTextDatum(TL_DATUM);
   canvas.setCursor(10, 10);
-  canvas.println("Select KML File");
+  canvas.println(I18n::t(T_FILE_SELECT_TITLE));
   
   // 绘制分隔线
   canvas.drawLine(10, 25, SCREEN_WIDTH - 10, 25, TFT_BLACK);
@@ -390,6 +448,12 @@ void drawFileSelectionMenu() {
     canvas.fillRect(scrollbarX, thumbY, scrollbarWidth, thumbHeight, 0x7BEF);
   }
   
+  // 底部操作提示
+  setUiFont();
+  canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+  canvas.setCursor(10, SCREEN_HEIGHT - (I18n::getInstance().isChinese() ? 13 : 11));
+  canvas.print(I18n::t(T_FILE_SELECT_HINT));
+
   canvas.pushSprite(0, 0);
 }
 
@@ -419,7 +483,12 @@ currentKmlFile = fileName; // 保存当前加载的文件名
   canvas.pushSprite(0, 0);
   
   // 动态分配内存以节省启动时的栈空间
-  if (kmlParser) delete kmlParser;
+  if (kmlParser) {
+    delete kmlParser;
+    kmlParser = nullptr;
+    pointPool = nullptr;
+  }
+  Serial.printf("[KML] Before alloc: Free Heap=%d, Max Alloc Block=%d\n", (int)ESP.getFreeHeap(), (int)ESP.getMaxAllocHeap());
   kmlParser = new (std::nothrow) KMLParser();
   
   if (!kmlParser || kmlParser->getPointPool() == nullptr) {
@@ -562,10 +631,195 @@ void stopHttpServer() {
   }
 }
 
+bool initSDCard() {
+  #define SD_SCK 40
+  #define SD_MISO 39
+  #define SD_MOSI 14
+  #define SD_CS 12
+  
+  Serial.println("Initializing SPI for SD card...");
+  sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+
+  // 优先尝试 20MHz 高速 SPI，失败则阶梯降级到 10MHz、4MHz (参考 cardputer_Camera 提速策略)
+  bool sdMounted = false;
+  if (SD.begin(SD_CS, sdSPI, 20000000)) {
+    sdMounted = true;
+    Serial.println("SD card mounted at 20MHz SPI");
+  } else if (SD.begin(SD_CS, sdSPI, 10000000)) {
+    sdMounted = true;
+    Serial.println("SD card mounted at 10MHz SPI");
+  } else if (SD.begin(SD_CS, sdSPI, 4000000)) {
+    sdMounted = true;
+    Serial.println("SD card mounted at 4MHz SPI");
+  }
+
+  if (sdMounted) {
+    if (SD.cardType() != CARD_NONE) {
+      sdInitialized = true;
+      Serial.println("SD card initialized successfully with independent SPI");
+      return true;
+    }
+  }
+  
+  // 备用 SPI 初始化
+  Serial.println("Attempting fallback to default SPI...");
+  SPI.begin(SD_SCK, SD_MISO, SD_MOSI);
+  if (SD.begin(SD_CS, SPI, 20000000) || SD.begin(SD_CS, SPI, 10000000) || SD.begin(SD_CS)) {
+    if (SD.cardType() != CARD_NONE) {
+      sdInitialized = true;
+      Serial.println("SD card initialized successfully with default SPI fallback");
+      return true;
+    }
+  }
+  
+  sdInitialized = false;
+  Serial.println("SD card initialization failed");
+  return false;
+}
+
+static int32_t onUsbMscRead(uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
+  if (!sdInitialized) return -1;
+  uint32_t sector_count = bufsize / 512;
+  for (uint32_t i = 0; i < sector_count; i++) {
+    if (!SD.readRAW((uint8_t*)buffer + i * 512, lba + i)) {
+      return -1;
+    }
+  }
+  return bufsize;
+}
+
+static int32_t onUsbMscWrite(uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize) {
+  if (!sdInitialized) return -1;
+  uint32_t sector_count = bufsize / 512;
+  for (uint32_t i = 0; i < sector_count; i++) {
+    if (!SD.writeRAW(buffer + i * 512, lba + i)) {
+      return -1;
+    }
+  }
+  return bufsize;
+}
+
+void enterUsbMscMode() {
+  if (!sdInitialized) {
+    showStatusToast(I18n::t(T_TOAST_SD_NOT_READY));
+    return;
+  }
+
+  usbMscModeOpen = true;
+
+  // 1. 如果当前正在记录轨迹，先安全停止并保存
+  if (trackingManager.isTracking()) {
+    trackingManager.stopTracking();
+    renderEngine.setTrackingState(false);
+  }
+
+  // 2. 释放可能占用的路径点内存以释放系统资源
+  if (kmlParser) {
+    delete kmlParser;
+    kmlParser = nullptr;
+    pointPool = nullptr;
+    totalPoints = 0;
+    renderEngine.releaseWorldPoints();
+  }
+
+  // 3. 绘制 USB 传输界面 (统一 1 像素黑色单线边框，左对齐标题)
+  canvas.fillRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_WHITE);
+  canvas.drawRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_BLACK);
+
+  setUiFont();
+  canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+  canvas.setTextSize(1);
+  canvas.setCursor(20, 18);
+  canvas.print(I18n::t(T_USB_TITLE));
+
+  uint64_t cardSizeMB = SD.cardSize() / (1024 * 1024);
+  canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+  canvas.setCursor(20, 36);
+  canvas.printf("%s%llu MB", I18n::t(T_USB_SD_CARD), cardSizeMB);
+
+  canvas.setCursor(20, 52);
+  canvas.setTextColor(TFT_DARKGREEN, TFT_WHITE);
+  canvas.print(I18n::t(T_USB_STATUS_MOUNTED));
+
+  canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+  canvas.setCursor(20, 70);
+  canvas.print(I18n::t(T_USB_HINT_1));
+  canvas.setCursor(20, 86);
+  canvas.setTextColor(TFT_RED, TFT_WHITE);
+  canvas.print(I18n::t(T_USB_HINT_2));
+
+  canvas.setCursor(20, 106);
+  canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+  canvas.print(I18n::t(T_USB_EXIT_HINT));
+
+  canvas.pushSprite(0, 0);
+
+  // 4. 等待 'u' 键释放，防止重复判定
+  while (M5Cardputer.Keyboard.isKeyPressed('u')) {
+    M5Cardputer.update();
+    delay(10);
+  }
+
+  // 5. 启动 USB MSC (完全参考 cardputer_Camera 稳定规范)
+  msc.onRead(onUsbMscRead);
+  msc.onWrite(onUsbMscWrite);
+  msc.mediaPresent(true);
+
+  uint64_t csize = SD.cardSize();
+  uint32_t sectors = (csize > 0) ? (csize / 512) : 1;
+  msc.begin(sectors, 512);
+  USB.begin();
+  Serial.printf("[USB] Mass Storage started: %u sectors\n", sectors);
+
+  // 6. 专有阻塞等待循环，专供 PC 端访问 SD 卡，避免任何后台任务与息屏休眠
+  bool exitUsb = false;
+  while (!exitUsb) {
+    M5Cardputer.update();
+    if (M5Cardputer.Keyboard.isKeyPressed('u') || M5Cardputer.Keyboard.isKeyPressed('`')) {
+      exitUsb = true;
+    }
+    delay(50);
+  }
+
+  // 等待按键释放防抖
+  while (M5Cardputer.Keyboard.isKeyPressed('u') || M5Cardputer.Keyboard.isKeyPressed('`')) {
+    M5Cardputer.update();
+    delay(10);
+  }
+
+  // 7. 停止 USB MSC 并重新挂载 SD 卡
+  msc.mediaPresent(false);
+  msc.end();
+
+  SD.end();
+  delay(200);
+  initSDCard();
+
+  if (currentKmlFile != "" && sdInitialized) {
+    loadSelectedKMLFile(currentKmlFile);
+  }
+
+  usbMscModeOpen = false;
+  lastActivityTime = millis(); // 刷新活动时间，防止退出后立即息屏
+  Serial.println("[USB] Mass Storage stopped. SD card remounted.");
+
+  // 重新渲染主界面
+  renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(),
+                      sdInitialized, hasRoute, pointPool, totalPoints,
+                      kmlParser ? kmlParser->getPOIPool() : nullptr,
+                      kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
+  canvas.pushSprite(0, 0);
+}
+
+
 void setup() {
   // 首先初始化串口通信用于调试
   Serial.begin(115200);
   Serial.println("Starting HikePod setup...");
+
+  // 初始化 i18n 国际化模块 (从 NVS 读取语言设置，默认英文)
+  I18n::getInstance().begin();
+  Serial.printf("Language initialized: %s\n", I18n::getInstance().isChinese() ? "Chinese" : "English");
   
   // 初始化M5Cardputer（按照M5Mp3的方式，先初始化M5Cardputer）
   Serial.println("Initializing M5Cardputer...");
@@ -628,189 +882,24 @@ void setup() {
     Serial.println("Disabled additional LoRa module pins to reduce power consumption (Cardputer ADV)");
   }
   
-  // 使用官方推荐的SD卡引脚配置
-  #define SD_SCK 40
-  #define SD_MISO 39
-  #define SD_MOSI 14
-  #define SD_CS 12
-  
-  // 初始化独立的SPI对象
-  Serial.println("Initializing SPI with pins - SCK: " + String(SD_SCK) + ", MISO: " + String(SD_MISO) + ", MOSI: " + String(SD_MOSI) + ", CS: " + String(SD_CS));
-  sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  //delay(50); // 添加适当的延迟
-  
-  // 尝试初始化SD卡（使用标准SD库和独立SPI对象）
-  Serial.println("Attempting SD card initialization with independent SPI object...");
+  // 优先初始化SD卡（使用独立的SPI对象）
+  Serial.println("Attempting SD card initialization...");
   sdInitialized = false;
   hasRoute = false;
   
-  if (SD.begin(SD_CS, sdSPI)) {
-    Serial.println("SD card initialized successfully with independent SPI object");
-    sdInitialized = true;
-    
-    // 检查SD卡类型
-    uint8_t cardType = SD.cardType();
-    if (cardType == CARD_NONE) {
-      Serial.println("No SD card attached");
-      sdInitialized = false;
-    } else {
-      Serial.print("SD Card Type: ");
-      if (cardType == CARD_MMC) {
-        Serial.println("MMC");
-      } else if (cardType == CARD_SD) {
-        Serial.println("SDSC");
-      } else if (cardType == CARD_SDHC) {
-        Serial.println("SDHC");
-      } else {
-        Serial.println("UNKNOWN");
-      }
-      
-      // 检查SD卡根目录
-      Serial.println("Listing root directory contents:");
-      File root = SD.open("/");
-      if (root) {
-        while (true) {
-          File entry = root.openNextFile();
-          if (!entry) {
-            break;
-          }
-          Serial.print(entry.name());
-          if (entry.isDirectory()) {
-            Serial.println("/");
-          } else {
-            Serial.print(" ");
-            Serial.println(entry.size());
-          }
-          entry.close();
-        }
-        root.close();
-      } else {
-        Serial.println("Failed to open root directory");
-      }
-      
-      // 检查HikePod目录是否存在
-      if (SD.exists("/HikePod")) {
-        Serial.println("HikePod directory exists");
-        // 列出HikePod目录内容
-        Serial.println("Listing HikePod directory contents:");
-        File hikePodDir = SD.open("/HikePod");
-        if (hikePodDir) {
-          while (true) {
-            File entry = hikePodDir.openNextFile();
-            if (!entry) {
-              break;
-            }
-            Serial.print(entry.name());
-            if (entry.isDirectory()) {
-              Serial.println("/");
-            } else {
-              Serial.print(" ");
-              Serial.println(entry.size());
-            }
-            entry.close();
-          }
-          hikePodDir.close();
-        } else {
-          Serial.println("Failed to open HikePod directory");
-        }
-      } else {
-        Serial.println("HikePod directory does not exist");
-      }
-      
-      // 不再自动加载KML文件，只在用户选择后加载
+  if (initSDCard()) {
+    Serial.println("SD card mounted successfully.");
+    if (!SD.exists("/HikePod")) {
+      SD.mkdir("/HikePod");
+      Serial.println("Created /HikePod directory");
     }
   } else {
-    Serial.println("ERROR: SD Mount Failed with independent SPI object!");
-    sdInitialized = false;
-    
-    // 尝试使用默认SPI对象作为后备
-    Serial.println("Attempting fallback to default SPI object...");
-    SPI.begin(SD_SCK, SD_MISO, SD_MOSI);
-    //delay(500);
-    if (SD.begin(SD_CS)) {
-      Serial.println("SD card initialized successfully with default SPI object");
-      sdInitialized = true;
-      
-      // 检查SD卡类型
-      uint8_t cardType = SD.cardType();
-      if (cardType == CARD_NONE) {
-        Serial.println("No SD card attached");
-        sdInitialized = false;
-      } else {
-        Serial.print("SD Card Type: ");
-        if (cardType == CARD_MMC) {
-          Serial.println("MMC");
-        } else if (cardType == CARD_SD) {
-          Serial.println("SDSC");
-        } else if (cardType == CARD_SDHC) {
-          Serial.println("SDHC");
-        } else {
-          Serial.println("UNKNOWN");
-        }
-        
-        // 检查SD卡根目录
-        Serial.println("Listing root directory contents:");
-        File root = SD.open("/");
-        if (root) {
-          while (true) {
-            File entry = root.openNextFile();
-            if (!entry) {
-              break;
-            }
-            Serial.print(entry.name());
-            if (entry.isDirectory()) {
-              Serial.println("/");
-            } else {
-              Serial.print(" ");
-              Serial.println(entry.size());
-            }
-            entry.close();
-          }
-          root.close();
-        } else {
-          Serial.println("Failed to open root directory");
-        }
-        
-        // 检查HikePod目录是否存在
-        if (SD.exists("/HikePod")) {
-          Serial.println("HikePod directory exists");
-          // 列出HikePod目录内容
-          Serial.println("Listing HikePod directory contents:");
-          File hikePodDir = SD.open("/HikePod");
-          if (hikePodDir) {
-            while (true) {
-              File entry = hikePodDir.openNextFile();
-              if (!entry) {
-                break;
-              }
-              Serial.print(entry.name());
-              if (entry.isDirectory()) {
-                Serial.println("/");
-              } else {
-                Serial.print(" ");
-                Serial.println(entry.size());
-              }
-              entry.close();
-            }
-            hikePodDir.close();
-          } else {
-            Serial.println("Failed to open HikePod directory");
-          }
-        } else {
-          Serial.println("HikePod directory does not exist");
-        }
-        
-        // 不再自动加载KML文件，只在用户选择后加载
-      }
-    } else {
-      Serial.println("ERROR: SD Mount Failed with default SPI object too!");
-      sdInitialized = false;
-    }
-  }
-  
-  if(!sdInitialized) {
     Serial.println("SD card initialization failed");
   }
+
+  // 初始化中文输入法 (词库直接内存映射自 Flash)
+  IME::getInstance().begin();
+  IME::getInstance().setActive(false);
   
   // 初始化空路线
   routePoints.clear();
@@ -875,51 +964,109 @@ void loop() {
   // 更新BMI270姿态传感器数据
   updateOrientation();
   
-  // 检查键盘状态变化（极致兼容方案：带边沿检测的轮询，彻底解决抖动和闪退）
-  static Keyboard_Class::KeysState prevRawKeys; // 记录上一帧的原始物理状态
-  Keyboard_Class::KeysState rawKeys;            // 当前帧扫描到的原始物理状态
-  rawKeys.reset();
-
-  // 1. 扫描物理按键状态
-  if (M5Cardputer.Keyboard.isKeyPressed(0x28)) rawKeys.enter = true;
-  if (M5Cardputer.Keyboard.isKeyPressed(0x2a)) rawKeys.del = true;
-  if (M5Cardputer.Keyboard.isKeyPressed(0x2b)) rawKeys.tab = true;
+  // 检查键盘状态变化（工业级时间去抖与连发过滤器：彻底解决微动按键触点弹跳连击与误触）
+  bool rawEnter = M5Cardputer.Keyboard.isKeyPressed(0x28);
+  bool rawDel   = M5Cardputer.Keyboard.isKeyPressed(0x2a);
+  bool rawTab   = M5Cardputer.Keyboard.isKeyPressed(0x2b);
 
   const char check_chars[] = "hvcwsiop[]=+-_ t;.,/`abcdefghijklmnopqrstuvwxyz0123456789";
-  for (int i = 0; i < sizeof(check_chars) - 1; i++) {
-      if (M5Cardputer.Keyboard.isKeyPressed(check_chars[i])) rawKeys.word.push_back(check_chars[i]);
-  }
   const char shift_chars[] = "~!@#$%^&*()_{}:\"<>?|";
-  for (int i = 0; i < sizeof(shift_chars) - 1; i++) {
-      if (M5Cardputer.Keyboard.isKeyPressed(shift_chars[i])) rawKeys.word.push_back(shift_chars[i]);
-  }
 
-  // 2. 边沿检测逻辑：仅将“本帧新按下”的键作为事件触发，防止矩阵噪声导致的重复触发
+  // 按键去抖与长按状态结构
+  struct KeyDebounceState {
+    bool isDown = false;
+    uint32_t pressTime = 0;
+    uint32_t lastTriggerTime = 0;
+    uint32_t releaseTime = 0;
+  };
+  static KeyDebounceState charStates[128];
+  static KeyDebounceState enterState, delState, tabState;
+
+  uint32_t now = millis();
+  const uint32_t DEBOUNCE_MS = 35;       // 机械触点去抖时间窗：消除 5~30ms 触点回弹产生的假断开和假重按
+  const uint32_t REPEAT_DELAY_MS = 450;  // 初始长按延迟：单击敲击在 450ms 内绝对只触发一次
+  const uint32_t REPEAT_RATE_MS = 110;   // 连击触发周期：持续按住超过 450ms 后平滑连发
+
+  auto processKey = [&](bool isPhysicallyDown, KeyDebounceState& state, bool allowRepeat) -> bool {
+    if (isPhysicallyDown) {
+      if (!state.isDown) {
+        // 新按下：必须距上次释放超过去抖时间窗，防止按键抖动
+        if (now - state.releaseTime >= DEBOUNCE_MS) {
+          state.isDown = true;
+          state.pressTime = now;
+          state.lastTriggerTime = now;
+          return true; // 触发按键事件
+        }
+      } else if (allowRepeat) {
+        // 持续按住连发检测
+        if (now - state.pressTime >= REPEAT_DELAY_MS) {
+          if (now - state.lastTriggerTime >= REPEAT_RATE_MS) {
+            state.lastTriggerTime = now;
+            return true; // 连发触发
+          }
+        }
+      }
+    } else {
+      if (state.isDown) {
+        state.isDown = false;
+        state.releaseTime = now;
+      }
+    }
+    return false;
+  };
+
   Keyboard_Class::KeysState keys;
   keys.reset();
   bool keyboardChanged = false;
 
-  if (rawKeys.enter && !prevRawKeys.enter) { keys.enter = true; keyboardChanged = true; }
-  if (rawKeys.del && !prevRawKeys.del) { keys.del = true; keyboardChanged = true; }
-  if (rawKeys.tab && !prevRawKeys.tab) { keys.tab = true; keyboardChanged = true; }
-
-  for (char c : rawKeys.word) {
-      bool alreadyPressed = false;
-      for (char p : prevRawKeys.word) if (p == c) alreadyPressed = true;
-      if (!alreadyPressed) {
-          keys.word.push_back(c);
-          keyboardChanged = true;
-      }
+  // Enter 绝不连发，防止按键穿透
+  if (processKey(rawEnter, enterState, false)) {
+    keys.enter = true;
+    keyboardChanged = true;
+  }
+  // Del 允许连发，长按方便快速删除
+  if (processKey(rawDel, delState, true)) {
+    keys.del = true;
+    keyboardChanged = true;
+  }
+  // Tab 不连发
+  if (processKey(rawTab, tabState, false)) {
+    keys.tab = true;
+    keyboardChanged = true;
   }
 
-  // 3. 记录当前状态供下一帧对比
-  prevRawKeys = rawKeys;
+  // 扫描字符键
+  for (size_t i = 0; i < sizeof(check_chars) - 1; i++) {
+    char c = check_chars[i];
+    if (c >= 0 && c < 128) {
+      bool isDown = M5Cardputer.Keyboard.isKeyPressed(c);
+      // 方向键与空格键允许长按连按，普通字母敲击单次触发
+      bool allowRepeat = (c == ';' || c == '.' || c == ',' || c == '/' || c == ' ');
+      if (processKey(isDown, charStates[(uint8_t)c], allowRepeat)) {
+        keys.word.push_back(c);
+        keyboardChanged = true;
+      }
+    }
+  }
+
+  // 扫描 Shift 字符
+  for (size_t i = 0; i < sizeof(shift_chars) - 1; i++) {
+    char c = shift_chars[i];
+    if (c >= 0 && c < 128) {
+      bool isDown = M5Cardputer.Keyboard.isKeyPressed(c);
+      if (processKey(isDown, charStates[(uint8_t)c], false)) {
+        keys.word.push_back(c);
+        keyboardChanged = true;
+      }
+    }
+  }
   
   // 保持与项目后续逻辑兼容
   bool keyboardPressed = (keys.word.size() > 0 || keys.enter || keys.del || keys.tab);
   
   // 处理键盘输入控制逻辑
   handleControls(keyboardChanged, keyboardPressed, keys);
+
 
   // 检查用户活动
   if (keyboardChanged || keyboardPressed) {
@@ -971,14 +1118,13 @@ void loop() {
   }
   
   // 根据当前模式执行不同功能
-  if (currentMode == MODE_HIKEPOD && !httpServerMenuOpen) {
+  if (currentMode == MODE_HIKEPOD && !httpServerMenuOpen && !usbMscModeOpen && !waypointInputOpen) {
     // 将交互控制逻辑完全交由 handleControls 处理
     interactionManager.update(keyboardChanged, keyboardPressed, keys);
     
     // 检查是否需要重绘
     bool needRender = false;
     
-    static bool hasUserPanned = false;  // 跟踪用户是否已手动操作过地图
     static bool initialPositionSet = false;  // 跟踪是否已设置初始位置
     static Location prevLocation; // 用于跟踪GPS位置变化
     static bool prevLocationInitialized = false;  // 跟踪prevLocation是否已初始化
@@ -995,33 +1141,35 @@ void loop() {
     unsigned long currentTime = millis();
     unsigned long gpsInterval;
     
-    // 检查GNSS模块是否处于待机模式
-    bool currentGNSSStandbyState = gnssModule.isInStandbyMode();
-    if (currentGNSSStandbyState) {
-      // 待机模式下，不执行GPS更新
-      // 只有当状态变化时才输出日志
-      if (currentGNSSStandbyState != lastGNSSStandbyState) {
-        Serial.println("GNSS in standby mode, skipping update");
-        lastGNSSStandbyState = currentGNSSStandbyState;
-      }
+    bool inStandbyMode = gnssModule.isInStandbyMode();
+    if (inStandbyMode) {
+      // 待机模式下保持1秒更新，保证记录精度
+      gpsInterval = 1000;
     } else {
-      // 只有当状态变化时才输出日志
-      if (currentGNSSStandbyState != lastGNSSStandbyState) {
-        Serial.println("GNSS exited standby mode, resuming update");
-        lastGNSSStandbyState = currentGNSSStandbyState;
-      }
+      // 正常工作模式：检查GNSS定位状态
       if (isGNSSSearching) {
-        gpsInterval = GPS_UPDATE_INTERVAL_SEARCH; // 搜索模式使用更高频率
+        // 搜星阶段（未定位）：500ms检查一次
+        gpsInterval = 500;
       } else {
-        gpsInterval = isScreenOff ? GPS_UPDATE_INTERVAL_SCREEN_OFF : GPS_UPDATE_INTERVAL_NORMAL;
+        // 已定位阶段：1000ms（1秒）更新一次
+        gpsInterval = 1000;
+      }
+    }
+    
+    // 检查是否到达更新时间
+    static unsigned long lastGpsProcessTime = 0;
+    if (currentTime - lastGpsProcessTime >= gpsInterval) {
+      lastGpsProcessTime = currentTime;
+      
+      // 更新定位点锁定的动画状态（如果处于锁定状态）
+      if (renderEngine.isLocationLockedState()) {
+        needRender = true;
       }
       
-      if (currentTime - lastGPSUpdateTime > gpsInterval) {
-        // 读取GNSS数据
+      // 读取GNSS数据
+      if (!inStandbyMode) {
         gnssModule.update();
-        // 无论是否有新数据，都获取当前位置，以确保currentLocation始终是最新的
         currentLocation = gnssModule.getCurrentLocation();
-        lastGPSUpdateTime = currentTime;
         
         // 如果获取到GPS时间，设置系统时间
         if (!systemTimeSetFromGPS) {
@@ -1049,19 +1197,40 @@ void loop() {
     // 检查用户是否进行了手动操作（缩放或平移）
     bool userInteracted = interactionManager.isZoomChanged() || interactionManager.isPanChanged();
     
-    // 检查空格键是否被按下
+    // 检查空格键是否被按下（一键切换/恢复定位居中跟随状态）
     if (interactionManager.isSpaceKeyPressed()) {
-      // 切换定位点锁定状态
       bool currentLocked = renderEngine.isLocationLockedState();
-      renderEngine.setLocationLocked(!currentLocked);
+      bool newLocked = !currentLocked;
+      renderEngine.setLocationLocked(newLocked);
+      hasUserPanned = !newLocked;
       
-      if (!currentLocked) {
-        Serial.println("[Location] Location locked");
+      if (newLocked) {
+        if (currentLocation.isValid) {
+          if (currentViewMode == MODE_2D) {
+            renderEngine.centerOnLocation(currentLocation.latitude, currentLocation.longitude);
+            interactionManager.setPanOffset(0, 0);
+          } else if (currentViewMode == MODE_3D) {
+            renderEngine.center3DOnLocation(currentLocation);
+          }
+          showStatusToast(I18n::t(T_TOAST_FOLLOW_ON));
+          Serial.println("[Location] Follow locked ON");
+        } else {
+          if (!routePoints.empty()) {
+            Location startPoint = routePoints[0];
+            if (currentViewMode == MODE_2D) {
+              renderEngine.centerOnLocation(startPoint.latitude, startPoint.longitude);
+              interactionManager.setPanOffset(0, 0);
+            }
+          }
+          showStatusToast(I18n::t(T_ALERT_GPS_NO_FIX_1));
+          Serial.println("[Location] Follow ON (Waiting GPS)");
+        }
       } else {
-        Serial.println("[Location] Location unlocked");
+        showStatusToast(I18n::t(T_TOAST_FOLLOW_OFF));
+        Serial.println("[Location] Follow OFF (Free Pan Mode)");
       }
       
-      // 重置空格键标志
+      needRender = true;
       interactionManager.resetSpaceKeyPressed();
     }
     
@@ -1071,6 +1240,7 @@ void loop() {
         // 停止tracking
         trackingManager.stopTracking();
         renderEngine.setTrackingState(false);
+        showStatusToast(I18n::t(T_TOAST_TRACK_SAVED));
         Serial.println("[Tracking] Tracking stopped");
       } else {
         // 检查GPS定位是否有效
@@ -1078,20 +1248,8 @@ void loop() {
           // GPS未定位，显示提示信息框
           showGPSNoFixAlert();
         } else {
-          // 启动tracking
-          if (trackingManager.startTracking()) {
-            renderEngine.setTrackingState(true);
-            Serial.println("[Tracking] Tracking started");
-            
-            // 确保GNSS模块退出待机模式
-            if (gnssModule.isInStandbyMode()) {
-              gnssModule.exitStandbyMode();
-              gnssModule.setStandbyMode(false);
-              Serial.println("[Tracking] Exited GNSS standby mode for tracking");
-            }
-          } else {
-            Serial.println("[Tracking] Failed to start tracking");
-          }
+          // 呼出输入法弹窗，输入自定义轨迹名称（确认后自动拼接时间戳）
+          openTextInputDialog(INPUT_TRACKING_FILENAME, I18n::t(T_DIALOG_TRACK_TITLE), "Track");
         }
       }
       
@@ -1107,13 +1265,6 @@ void loop() {
     renderEngine.updateUserAction(actualUserInput || debugAction);
     
     if (userInteracted) {
-      hasUserPanned = true;
-      static bool userInteractedLogged = false;
-      if (!userInteractedLogged) {
-        Serial.println("[PAN DEBUG] User interacted, set hasUserPanned to true");
-        userInteractedLogged = true;
-      }
-      
       // 获取缩放级别和平移偏移
       int zoom = interactionManager.getZoomLevel();
       int panX, panY;
@@ -1136,9 +1287,15 @@ void loop() {
         // 使用zoomAroundPoint方法进行缩放
         renderEngine.zoomAroundPoint(centerLat, centerLng, zoom);
         
-        // 同步平移偏移量和缩放级别到InteractionManager
-        renderEngine.getPanOffset(panX, panY);
-        interactionManager.setPanOffset(panX, panY);
+        // 如果定位处于锁定跟随状态，缩放后依然居中在当前定位
+        if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
+          renderEngine.centerOnLocation(currentLocation.latitude, currentLocation.longitude);
+          interactionManager.setPanOffset(0, 0);
+        } else {
+          // 同步平移偏移量和缩放级别到InteractionManager
+          renderEngine.getPanOffset(panX, panY);
+          interactionManager.setPanOffset(panX, panY);
+        }
         // 同步缩放级别
         int currentZoom = renderEngine.getZoomLevel();
         interactionManager.setZoomLevel(currentZoom);
@@ -1148,8 +1305,10 @@ void loop() {
           Serial.printf("[ZOOM DEBUG] Zoomed to level %d around point (%.6f, %.6f)\n", zoom, centerLat, centerLng);
           zoomAppliedLogged = true;
         }
-      } else {
-        // 平移操作：直接设置平移偏移
+      } else if (interactionManager.isPanChanged()) {
+        // 平移操作：用户手动方向键平移，进入自由浏览模式
+        hasUserPanned = true;
+        renderEngine.setLocationLocked(false);
         renderEngine.setPanOffset(panX, panY);
         
         static bool panAppliedLogged = false;
@@ -1160,78 +1319,37 @@ void loop() {
       }
       
       needRender = true;
-      // 清除变化标志，避免重复处理
-      // 注意：这里我们不直接清除标志，而是依赖InteractionManager内部处理
     }
     
-    // 如果还没有设置初始位置，不管有没有GPS，都尝试居中
+    // 如果还没有设置初始位置，不管是GPS还是路线，都尝试居中
     if (!initialPositionSet) {
       if (currentLocation.isValid) {
-        // 如果有有效的GPS位置，则居中到GPS位置
-        renderEngine.centerOnLocation(currentLocation.latitude, currentLocation.longitude);
-        hasUserPanned = false; // Reset panning flag since we're starting fresh
+        if (currentViewMode == MODE_2D) {
+          renderEngine.centerOnLocation(currentLocation.latitude, currentLocation.longitude);
+          interactionManager.setPanOffset(0, 0);
+        } else if (currentViewMode == MODE_3D) {
+          renderEngine.center3DOnLocation(currentLocation);
+        }
+        hasUserPanned = false;
         initialPositionSet = true;
-        // 同步偏移量到InteractionManager
-        int panX, panY;
-        renderEngine.getPanOffset(panX, panY);
-        interactionManager.setPanOffset(panX, panY);
-        static bool initialGpsLogged = false;
-        if (!initialGpsLogged) {
-          Serial.println("[PAN DEBUG] Initial position set to GPS location");
-          Serial.printf("[PAN DEBUG] Synchronized pan offset: X=%d, Y=%d\n", panX, panY);
-          initialGpsLogged = true;
-        }
-      } else {
-        // 如果没有有效的GPS位置，但有路线数据，则居中到路线的起点
-        if (!routePoints.empty()) {
-          Location startPoint = routePoints[0];  // 取路线起点作为中心
+        Serial.println("[PAN DEBUG] Initial position set to GPS location");
+      } else if (!routePoints.empty()) {
+        Location startPoint = routePoints[0];
+        if (currentViewMode == MODE_2D) {
           renderEngine.centerOnLocation(startPoint.latitude, startPoint.longitude);
-          initialPositionSet = true; // 设置初始位置标志为true
-          // 同步偏移量到InteractionManager
-          int panX, panY;
-          renderEngine.getPanOffset(panX, panY);
-          interactionManager.setPanOffset(panX, panY);
-          static bool initialRouteLogged = false;
-          if (!initialRouteLogged) {
-            Serial.println("[PAN DEBUG] Initial position set to route start point");
-            Serial.printf("[PAN DEBUG] Synchronized pan offset: X=%d, Y=%d\n", panX, panY);
-            initialRouteLogged = true;
-          }
+          interactionManager.setPanOffset(0, 0);
         }
+        initialPositionSet = true;
+        Serial.println("[PAN DEBUG] Initial position set to route start point");
       }
     }
-    // 如果用户没有手动操作过地图，且当前有有效GPS位置，则居中到当前位置
-    else if (!hasUserPanned && currentLocation.isValid) {
-      renderEngine.centerOnLocation(currentLocation.latitude, currentLocation.longitude);
-      // 不要重置hasUserPanned标志，因为这是自动居中，不是用户手动操作
-      static bool autoCenterLogged = false;
-      if (!autoCenterLogged) {
-        Serial.println("[PAN DEBUG] Auto-centered to GPS location (user not panned)");
-        autoCenterLogged = true;
-      }
-    }
-    // 如果用户已经操作过地图，但GPS位置发生了大幅变化（>100米），则重新居中
-    else if (hasUserPanned && currentLocation.isValid && prevLocation.isValid) {
-      // 计算距离变化（简化计算）
-      double latDiff = fabs(currentLocation.latitude - prevLocation.latitude);
-      double lngDiff = fabs(currentLocation.longitude - prevLocation.longitude);
-      // 大约1度≈111公里，所以0.001度≈111米
-      if (latDiff > 0.0009 || lngDiff > 0.0009) {  // 大约100米的变化
+    // 徒步移动过程中实时跟随：只要处于锁定跟随状态且定位有效，无论是2D还是3D模式，始终保持定位焦点在屏幕中心！
+    else if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
+      if (currentViewMode == MODE_2D) {
         renderEngine.centerOnLocation(currentLocation.latitude, currentLocation.longitude);
-        hasUserPanned = false; // Reset panning flag since we moved significantly
-        static bool recenterLogged = false;
-        if (!recenterLogged) {
-          Serial.println("[PAN DEBUG] Re-centered due to GPS position change, reset hasUserPanned");
-          recenterLogged = true;
-        }
-      }
-    }
-    else if (hasUserPanned) {
-      // 如果用户已经手动操作过地图，则不执行自动居中
-      static bool skipAutoCenterLogged = false;
-      if (!skipAutoCenterLogged) {
-        Serial.println("[PAN DEBUG] User has panned, skipping auto-center");
-        skipAutoCenterLogged = true;
+        interactionManager.setPanOffset(0, 0);
+      } else if (currentViewMode == MODE_3D) {
+        renderEngine.center3DOnLocation(currentLocation);
       }
     }
     
@@ -1242,6 +1360,9 @@ void loop() {
     
     // 处理文件选择菜单
     if (fileSelectionMenuOpen) {
+      if (inputDialogOpen) {
+        return; // 输入法弹窗打开时优先处理，不拦截文件选择按键
+      }
       // 确保openMenu为true，这样键盘输入会被正确处理
       openMenu = true;
       
@@ -1260,7 +1381,7 @@ void loop() {
       if (keyboardChanged && keyboardPressed) {
         Serial.println("Keyboard input received in file selection menu");
         
-        // 处理导航键
+        // 处理导航键与重命名键
         bool hasNavigationKey = false;
         for(auto key : keys.word) {
           Serial.printf("Key pressed: %c (ASCII: %d)\n", key, key);
@@ -1278,11 +1399,22 @@ void loop() {
               Serial.printf("Selected file index: %d, file: %s\n", selectedFileIndex, kmlFileList[selectedFileIndex].c_str());
             }
             hasNavigationKey = true;
-          } else if (key == 8) { // 退格键作为取消（ASCII码8）
+          } else if (key == 'r') { // 重命名选中文件
+            if (selectedFileIndex >= 0 && selectedFileIndex < (int)kmlFileList.size()) {
+              String orig = kmlFileList[selectedFileIndex];
+              String defName = orig;
+              if (defName.endsWith(".kml") || defName.endsWith(".KML")) {
+                defName = defName.substring(0, defName.length() - 4);
+              }
+              openTextInputDialog(INPUT_RENAME_KML, I18n::t(T_DIALOG_RENAME_TITLE), defName, orig);
+              hasNavigationKey = true;
+            }
+          } else if (key == 8 || key == '`') { // 退格键或 Esc 键作为取消退出（ASCII码8 或 `）
             // 取消
-            Serial.println("Cancel key pressed");
+            Serial.println("Cancel/Esc key pressed in file selection menu");
             fileSelectionMenuOpen = false;
             openMenu = false;
+            lastFileMenuActionTime = millis();
             renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
             canvas.pushSprite(0, 0);
             Serial.println("File selection menu closed by cancel");
@@ -1294,9 +1426,9 @@ void loop() {
         
         // 处理回车键 - 只有当没有导航键被按下时才处理
         if (keys.enter && !hasNavigationKey) {
-          if (menuJustOpened) {
-            // 忽略第一次Enter键按下事件，这是从设置菜单传递过来的
-            Serial.println("Ignoring first Enter key press in file selection menu");
+          if (menuJustOpened || millis() - lastFileMenuActionTime < 400) {
+            // 忽略刚打开或刚从重命名对话框返回时的Enter键按下事件，彻底防止穿透加载文件
+            Serial.println("Ignoring Enter key press in file selection menu (debounce / just opened)");
             menuJustOpened = false;
           } else {
             Serial.println("Enter key pressed, selecting file");
@@ -1307,6 +1439,7 @@ void loop() {
               // 关闭文件选择菜单
               fileSelectionMenuOpen = false;
               openMenu = false;
+              lastFileMenuActionTime = millis();
               // 重新渲染界面
               renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
               canvas.pushSprite(0, 0);
@@ -1328,14 +1461,23 @@ void loop() {
     static unsigned long lastRenderTime = 0;
     const unsigned long RENDER_INTERVAL = 100; // 提高刷新率到10FPS以改善用户体验
     if (needRender || currentTime - lastRenderTime > RENDER_INTERVAL) {
-      if (!openMenu && !gpsNoFixAlertVisible && !helpMenuVisible) { // 只有在没有菜单打开且没有提示信息框时才渲染
+      if (!openMenu && !gpsNoFixAlertVisible && !kmlFullAlertVisible && !notTrackingAlertVisible && !helpMenuVisible) { // 只有在没有菜单打开且没有提示信息框时才渲染
         // 渲染界面，传递内存池信息以绘制完整路径和已记录的轨迹
         renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
+        if (millis() - statusToastTime < 2500 && statusToastText.length() > 0) {
+          canvas.setFont(&fonts::efontCN_12);
+          int w = canvas.textWidth(statusToastText.c_str());
+          int x = (SCREEN_WIDTH - w) / 2;
+          int y = SCREEN_HEIGHT - 18;
+          canvas.setTextColor(TFT_BLACK);
+          canvas.setCursor(x, y);
+          canvas.print(statusToastText);
+        }
         canvas.pushSprite(0, 0);  // 推送至屏幕
         lastRenderTime = currentTime;
       }
     }
-  } else if (currentMode == MODE_GPS_INFO && !httpServerMenuOpen) {
+  } else if (currentMode == MODE_GPS_INFO && !httpServerMenuOpen && !usbMscModeOpen) {
     // 处理GPS Info模式特定的键盘输入
     // 如果配置菜单打开，使用handleKeys处理菜单输入；否则使用handleGPSInfoKeys处理常规输入
     if (configsMenu) {
@@ -1412,19 +1554,20 @@ void drawHttpServerWindow(bool should_I) {
 
     // 绘制窗口
     canvas.fillRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_WHITE);
-    canvas.drawRect(12, 12, SCREEN_WIDTH - 24, SCREEN_HEIGHT - 24, TFT_BLACK);
+    canvas.drawRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_BLACK);
     
+    setUiFont();
     canvas.setTextColor(TFT_BLUE, TFT_WHITE);
     canvas.setTextSize(1);
-    canvas.setCursor(20, 20);
-    canvas.print("WiFi KML Manager");
+    canvas.setCursor(20, 18);
+    canvas.print(I18n::t(T_WIFI_TITLE));
     
     canvas.setTextColor(TFT_BLACK, TFT_WHITE);
     canvas.setCursor(25, 35);
     String deviceId = String((uint32_t)ESP.getEfuseMac(), HEX).substring(0, 4);
     canvas.printf("SSID: HikePod_%s", deviceId.c_str());
     
-    canvas.setCursor(25, 45);
+    canvas.setCursor(25, 48);
     canvas.print("Password: (None)");
     
     canvas.setCursor(25, 65);
@@ -1433,12 +1576,11 @@ void drawHttpServerWindow(bool should_I) {
     canvas.println(wifiManager.getStatusMsg());
     
     canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-    canvas.setCursor(25, 80);
-    canvas.println("Connect to WiFi & Visit URL to ");
-    canvas.println("     upload/manage KMLs");
+    canvas.setCursor(25, 82);
+    canvas.println(I18n::getInstance().isChinese() ? "连接 WiFi 并访问 IP 地址以管理 KML" : "Connect to WiFi & Visit IP to manage KML");
     
-    canvas.setCursor(20, 120);
-    canvas.println("Press 'w' to close & exit");
+    canvas.setCursor(20, 106);
+    canvas.println(I18n::t(T_WIFI_HINT_EXIT));
     
     canvas.pushSprite(0, 0);
   } else {
@@ -1451,19 +1593,180 @@ void drawHttpServerWindow(bool should_I) {
   }
 }
 
+
+void openTextInputDialog(InputDialogType type, const String& title, const String& defaultText, const String& origFile) {
+  currentInputType = type;
+  inputDialogTitle = title;
+  inputDialogText = defaultText;
+  inputDialogOriginalFile = origFile;
+  openMenu = true;
+  inputDialogOpen = true;
+
+  IME& ime = IME::getInstance();
+  ime.setActive(true);
+  ime.reset();
+  
+  drawTextInputDialog(true);
+}
+
+void drawTextInputDialog(bool should_I) {
+  if (should_I) {
+    openMenu = true;
+    inputDialogOpen = true;
+
+    // 绘制统一风格窗口：(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20)，1 像素黑色单线边框
+    canvas.fillRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_WHITE);
+    canvas.drawRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_BLACK);
+
+    // 标题居左对齐 (20, 18)
+    setUiFont();
+    canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+    canvas.setTextSize(1);
+    canvas.setCursor(20, 18);
+    canvas.print(inputDialogTitle.length() > 0 ? inputDialogTitle.c_str() : "Input");
+
+    // 右上角输入法模式指示器 (拼 / EN)
+    IME& ime = IME::getInstance();
+    canvas.setFont(&fonts::Font0);
+    if (ime.active()) {
+      canvas.setTextColor(TFT_DARKGREEN, TFT_WHITE);
+      canvas.setCursor(185, 20);
+      canvas.print("[ZH/Pin]");
+    } else {
+      canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
+      canvas.setCursor(195, 20);
+      canvas.print("[EN]");
+    }
+
+    // 输入框背景 (浅灰矩形)
+    canvas.fillRect(20, 34, SCREEN_WIDTH - 40, 24, 0xF7BE);
+    canvas.drawRect(20, 34, SCREEN_WIDTH - 40, 24, TFT_BLACK);
+
+    // 绘制已输入的文字（使用支持中文的 efontCN_12）
+    canvas.setFont(&fonts::efontCN_12);
+    canvas.setCursor(24, 40);
+    if (inputDialogText.length() > 0) {
+      canvas.setTextColor(TFT_BLACK, 0xF7BE);
+      canvas.print(inputDialogText);
+    } else {
+      canvas.setTextColor(TFT_DARKGRAY, 0xF7BE);
+      if (currentInputType == INPUT_WAYPOINT_POI) {
+        canvas.print("Type name or 1-8...");
+      } else {
+        canvas.print("Type file name...");
+      }
+    }
+
+    // 绘制拼音拼写状态 vs 快捷预设提示
+    if (ime.active() && ime.composing()) {
+      // 拼写栏：> pinyin
+      canvas.setFont(&fonts::Font0);
+      canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+      canvas.setCursor(20, 64);
+      canvas.printf("> %s", ime.composition().c_str());
+
+      // 候选字列表
+      canvas.setFont(&fonts::efontCN_12);
+      const auto& cands = ime.candidates();
+      int startX = 20;
+      for (size_t i = 0; i < cands.size(); i++) {
+        canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+        canvas.setCursor(startX, 80);
+        canvas.printf("%d", (int)(i + 1));
+        canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+        canvas.setCursor(startX + 8, 80);
+        canvas.print(cands[i].c_str());
+        startX += 22;
+        if (startX > SCREEN_WIDTH - 30) break;
+      }
+      
+      canvas.setFont(&fonts::Font0);
+      canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
+      canvas.setCursor(20, 102);
+      canvas.print("[1-9] Pick | [Spc] 1st | [;/.] Page");
+    } else {
+      if (currentInputType == INPUT_WAYPOINT_POI) {
+        setUiFont();
+        canvas.setTextColor(TFT_DARKGREEN, TFT_WHITE);
+        canvas.setCursor(20, 64);
+        canvas.print(I18n::t(T_DIALOG_POI_QUICK_1));
+        canvas.setCursor(20, 78);
+        canvas.print(I18n::t(T_DIALOG_POI_QUICK_2));
+
+        setUiFont();
+        canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+        canvas.setCursor(20, 102);
+        canvas.print(I18n::t(T_DIALOG_SAVE_HINT));
+      } else if (currentInputType == INPUT_TRACKING_FILENAME) {
+        setUiFont();
+        canvas.setTextColor(TFT_DARKGREEN, TFT_WHITE);
+        canvas.setCursor(20, 64);
+        canvas.print(I18n::t(T_DIALOG_TRACK_HINT_1));
+        canvas.setCursor(20, 78);
+        canvas.print(I18n::t(T_DIALOG_TRACK_HINT_2));
+
+        setUiFont();
+        canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+        canvas.setCursor(20, 102);
+        canvas.print(I18n::t(T_DIALOG_START_HINT));
+      } else { // INPUT_RENAME_KML
+        setUiFont();
+        canvas.setTextColor(TFT_DARKGREEN, TFT_WHITE);
+        canvas.setCursor(20, 64);
+        canvas.print(I18n::t(T_DIALOG_RENAME_HINT_1));
+        canvas.setCursor(20, 78);
+        canvas.print(I18n::t(T_DIALOG_RENAME_HINT_2));
+
+        setUiFont();
+        canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+        canvas.setCursor(20, 102);
+        canvas.print(I18n::t(T_DIALOG_RENAME_HINT_3));
+      }
+    }
+
+    canvas.pushSprite(0, 0);
+  } else {
+    inputDialogOpen = false;
+    currentInputType = INPUT_NONE;
+    openMenu = false;
+    IME::getInstance().setActive(false);
+    // 如果是从文件列表打开的重命名，退出时重绘文件列表
+    if (fileSelectionMenuOpen) {
+      menuJustOpened = true;
+      lastFileMenuActionTime = millis();
+      drawFileSelectionMenu();
+    } else {
+      renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(),
+                          sdInitialized, hasRoute, pointPool, totalPoints,
+                          kmlParser ? kmlParser->getPOIPool() : nullptr,
+                          kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
+      canvas.pushSprite(0, 0);
+    }
+  }
+}
+
+void drawWaypointInputDialog(bool should_I) {
+  if (should_I) {
+    openTextInputDialog(INPUT_WAYPOINT_POI, "Insert Waypoint (POI)", "");
+  } else {
+    drawTextInputDialog(false);
+  }
+}
+
 void showGPSNoFixAlert() {
   gpsNoFixAlertVisible = true;
   
   // 绘制提示信息框
-  canvas.fillRect(40, 50, SCREEN_WIDTH - 80, 40, TFT_WHITE);
-  canvas.drawRect(40, 50, SCREEN_WIDTH - 80, 40, TFT_BLACK);
+  canvas.fillRect(40, 48, SCREEN_WIDTH - 80, 44, TFT_WHITE);
+  canvas.drawRect(40, 48, SCREEN_WIDTH - 80, 44, TFT_BLACK);
+  setUiFont();
   canvas.setTextColor(TFT_BLACK, TFT_WHITE);
   canvas.setTextSize(1);
   
   // 显示提示信息
-  canvas.setCursor(50, 65);
-  canvas.println("GPS no fix !");
-  canvas.setCursor(SCREEN_WIDTH - 65, 80);
+  canvas.setCursor(48, 62);
+  canvas.println(I18n::t(T_ALERT_GPS_NO_FIX_1));
+  canvas.setCursor(SCREEN_WIDTH - 65, 78);
   canvas.setTextColor(TFT_WHITE , TFT_BLACK);
   canvas.println("ok");
   
@@ -1474,16 +1777,17 @@ void showKMLFullAlert() {
   kmlFullAlertVisible = true;
   
   // 绘制提示信息框 (参考 GPS no fix 样式)
-  canvas.fillRect(30, 45, SCREEN_WIDTH - 60, 50, TFT_WHITE);
-  canvas.drawRect(30, 45, SCREEN_WIDTH - 60, 50, TFT_BLACK);
+  canvas.fillRect(30, 42, SCREEN_WIDTH - 60, 52, TFT_WHITE);
+  canvas.drawRect(30, 42, SCREEN_WIDTH - 60, 52, TFT_BLACK);
+  setUiFont();
   canvas.setTextColor(TFT_BLACK, TFT_WHITE);
   canvas.setTextSize(1);
   
   // 显示提示信息
-  canvas.setCursor(40, 55);
-  canvas.println("KML Point Limit!");
-  canvas.setCursor(40, 68);
-  canvas.println("Some points skipped.");
+  canvas.setCursor(38, 52);
+  canvas.println(I18n::t(T_ALERT_KML_LIMIT_1));
+  canvas.setCursor(38, 66);
+  canvas.println(I18n::t(T_ALERT_KML_LIMIT_2));
   
   canvas.setCursor(SCREEN_WIDTH - 55, 80);
   canvas.setTextColor(TFT_WHITE , TFT_BLACK);
@@ -1492,53 +1796,95 @@ void showKMLFullAlert() {
   canvas.pushSprite(0, 0);
 }
 
+void showNotTrackingAlert() {
+  notTrackingAlertVisible = true;
+  
+  // 绘制提示信息框 (参考 GPS no fix 样式)
+  canvas.fillRect(30, 42, SCREEN_WIDTH - 60, 52, TFT_WHITE);
+  canvas.drawRect(30, 42, SCREEN_WIDTH - 60, 52, TFT_BLACK);
+  setUiFont();
+  canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+  canvas.setTextSize(1);
+  
+  // 显示提示信息
+  canvas.setCursor(38, 52);
+  canvas.println(I18n::t(T_ALERT_NOT_TRACKING_1));
+  canvas.setCursor(38, 66);
+  canvas.println(I18n::t(T_ALERT_NOT_TRACKING_2));
+  
+  canvas.setCursor(SCREEN_WIDTH - 55, 80);
+  canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas.println("ok");
+  
+  canvas.pushSprite(0, 0);
+}
+
 void drawHikePodHelpMenu(bool should_I) {
   if (should_I == true) {
     openMenu = true;
-    // 绘制帮助菜单，风格与c设置菜单统一
-    canvas.fillRect(10, 10, SCREEN_WIDTH-20, SCREEN_HEIGHT-20, TFT_WHITE);
-    canvas.drawRect(12, 12, SCREEN_WIDTH-24, SCREEN_HEIGHT-24, TFT_BLACK);
-    canvas.setTextColor(TFT_BLACK , TFT_WHITE );
-    canvas.setTextSize(1);
+    helpMenuVisible = true;
     
-    // 显示帮助标题
+    // 绘制帮助菜单边框，风格与c设置菜单统一
+    canvas.fillRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_WHITE);
+    canvas.drawRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_BLACK);
+    
+    // 显示帮助标题（统一在边框内 (20, 18) 居左对齐）
+    setUiFont();
     canvas.setTextColor(TFT_BLUE, TFT_WHITE);
-    canvas.setCursor(20, 20);
-    canvas.println("HikePod Help");
+    canvas.setTextSize(1);
+    canvas.setCursor(20, 18);
+    canvas.print(I18n::t(T_HELP_TITLE));
     
-    // 列出支持的按键
-    const char* helpText[] = {
-      "[h] Help menu (this)",
-      "[c] Open settings menu",
-      "[v] Switch 2D/3D view",
-      "[Space] Lock/unlock(2D)/Rot center(3D)",
-      "[t] Start/stop tracking",
-      "[TAB] Switch to GPS Info",
-      "[w] WiFi KML transfer",
-      "[ESC] Toggle debug info",
-      "[+/-] Zoom in/out",
-      "[[/]] Adjust vert scale(3D)"
+    struct HelpItem {
+      const char* key;
+      const char* desc;
     };
     
-    int count = sizeof(helpText) / sizeof(helpText[0]);
-    int y = 30;
-    for (int i = 0; i < count; i++) {
-      String line = helpText[i];
-      int endKey = line.indexOf(']') + 1;
-      if (endKey > 0) {
-        String key = line.substring(0, endKey);
-        String desc = line.substring(endKey);
-        canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-        canvas.setCursor(20, y);
-        canvas.print(key);
-        canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-        canvas.print(desc);
-      } else {
-        canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-        canvas.setCursor(20, y);
-        canvas.print(line);
-      }
-      y += 10;
+    const HelpItem leftCol[] = {
+      {"[h]", I18n::t(T_HELP_THIS)},
+      {"[c]", I18n::t(T_HELP_SETTINGS)},
+      {"[v]", I18n::t(T_HELP_VIEW)},
+      {"[Spc]", I18n::t(T_HELP_LOCK)},
+      {"[t]", I18n::t(T_HELP_TRACK)},
+      {"[i]", I18n::t(T_HELP_INSERT_POI)},
+      {"[TAB]", I18n::t(T_HELP_GPS_INFO)}
+    };
+    
+    const HelpItem rightCol[] = {
+      {"[u]", I18n::t(T_HELP_USB_DISK)},
+      {"[w]", I18n::t(T_HELP_WIFI)},
+      {"[+/-]", I18n::t(T_HELP_ZOOM)},
+      {"[[/]]", I18n::t(T_HELP_VERT_SCALE)},
+      {"[`]", I18n::t(T_HELP_DEBUG)},
+      {"[Arr]", I18n::t(T_HELP_PAN)}
+    };
+    
+    // 中间纵向浅灰分割线
+    canvas.drawFastVLine(120, 30, 92, TFT_LIGHTGRAY);
+    
+    int yStart = 31;
+    int yStep = 13;
+    
+    // 绘制左列
+    for (int i = 0; i < 7; i++) {
+      int y = yStart + i * yStep;
+      canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+      canvas.setCursor(18, y);
+      canvas.print(leftCol[i].key);
+      canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+      canvas.setCursor(54, y);
+      canvas.print(leftCol[i].desc);
+    }
+    
+    // 绘制右列
+    for (int i = 0; i < 6; i++) {
+      int y = yStart + i * yStep;
+      canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+      canvas.setCursor(124, y);
+      canvas.print(rightCol[i].key);
+      canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+      canvas.setCursor(160, y);
+      canvas.print(rightCol[i].desc);
     }
     
     canvas.pushSprite(0, 0);
@@ -1546,7 +1892,10 @@ void drawHikePodHelpMenu(bool should_I) {
     openMenu = false;
     helpMenuVisible = false;
     // 重新渲染界面
-    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
+    renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(),
+                        sdInitialized, hasRoute, pointPool, totalPoints,
+                        kmlParser ? kmlParser->getPOIPool() : nullptr,
+                        kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
     canvas.pushSprite(0, 0);
   }
 }
@@ -1555,96 +1904,124 @@ void drawSettingsMenu(bool should_I) {
   if (should_I == true) {
     openMenu = true;
     settingsMenuOpen = true;
-    // 白色背景
-    canvas.fillRect(10, 10, SCREEN_WIDTH-20, SCREEN_HEIGHT-20, TFT_WHITE);
-    canvas.drawRect(12, 12, SCREEN_WIDTH-24, SCREEN_HEIGHT-24, TFT_BLACK);
-    canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-    canvas.setFont(&fonts::efontCN_12);
-    int y = 19;
-    
-    // 显示标题
-    canvas.setTextColor(TFT_BLUE, TFT_WHITE);
-    canvas.setCursor(20, y);
-    canvas.print("HikePod Settings");
-    y += 12;
-    
-    // 显示选择KML文件选项
-    canvas.setTextColor(settingsMenuSelection == 0 ? TFT_BLUE : TFT_BLACK, TFT_WHITE);
-    canvas.setCursor(20, y);
-    canvas.print("> Select KML File ");
-    y += 12;
-    
-    // 显示亮度调节选项
-    canvas.setTextColor(settingsMenuSelection == 1 ? TFT_BLUE : TFT_BLACK, TFT_WHITE);
-    canvas.setCursor(20, y);
-    canvas.print("> Brightness（10-255） : ");
-    canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-    canvas.print(String(screenBrightness));
-    y += 12;
 
-    // 显示屏幕超时时间选项
-    canvas.setTextColor(settingsMenuSelection == 2 ? TFT_BLUE : TFT_BLACK, TFT_WHITE);
-    canvas.setCursor(20, y);
-    canvas.print("> Screen Timeout : ");
-    canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-    if (SCREEN_TIMEOUT == 0) {
-      canvas.print("Never");
-    } else if (SCREEN_TIMEOUT < 60000) {
-      canvas.print(String(SCREEN_TIMEOUT / 1000) + "s");
-    } else {
-      int mins = SCREEN_TIMEOUT / 60000;
-      int secs = (SCREEN_TIMEOUT % 60000) / 1000;
-      if (secs == 0) {
-        canvas.print(String(mins) + "m");
-      } else {
-        canvas.print(String(mins) + "m " + String(secs) + "s");
+    // 自动修正视口偏移，确保选中项在可视区域内
+    if (settingsMenuSelection < settingsMenuScrollOffset) {
+      settingsMenuScrollOffset = settingsMenuSelection;
+    } else if (settingsMenuSelection >= settingsMenuScrollOffset + SETTINGS_VISIBLE_ITEMS) {
+      settingsMenuScrollOffset = settingsMenuSelection - SETTINGS_VISIBLE_ITEMS + 1;
+    }
+    if (settingsMenuScrollOffset < 0) settingsMenuScrollOffset = 0;
+    if (settingsMenuScrollOffset > SETTINGS_MENU_OPTIONS - SETTINGS_VISIBLE_ITEMS) {
+      settingsMenuScrollOffset = max(0, SETTINGS_MENU_OPTIONS - SETTINGS_VISIBLE_ITEMS);
+    }
+
+    // 白色背景与外框 (扩大至 224x123，留出充足内边距)
+    canvas.fillRect(8, 6, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 12, TFT_WHITE);
+    canvas.drawRect(8, 6, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 12, TFT_BLACK);
+    
+    // 显示标题栏 (下移至 y=13，与顶边留出安全内边距)
+    setUiFont();
+    canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+    canvas.setCursor(16, 13);
+    canvas.print(I18n::t(T_SETTINGS_TITLE));
+    canvas.drawFastHLine(10, 27, 220, 0xD6BA); // 标题分割线
+    
+    // 绘制可视选项 (SETTINGS_VISIBLE_ITEMS 项)
+    const int itemStartY = 30;
+    const int itemHeight = 13;
+    for (int i = 0; i < SETTINGS_VISIBLE_ITEMS; i++) {
+      int itemIdx = settingsMenuScrollOffset + i;
+      if (itemIdx >= SETTINGS_MENU_OPTIONS) break;
+      int curY = itemStartY + i * itemHeight;
+      bool isSelected = (settingsMenuSelection == itemIdx);
+
+      setUiFont();
+      canvas.setTextColor(isSelected ? TFT_BLUE : TFT_BLACK, TFT_WHITE);
+      canvas.setCursor(16, curY);
+
+      switch (itemIdx) {
+        case 0: // 选择 KML 文件
+          canvas.print(I18n::t(T_SETTINGS_SELECT_KML));
+          break;
+        case 1: // 屏幕亮度
+          canvas.print(I18n::t(T_SETTINGS_BRIGHTNESS));
+          canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+          canvas.print(String(screenBrightness));
+          break;
+        case 2: // 屏幕超时时间
+          canvas.print(I18n::t(T_SETTINGS_TIMEOUT));
+          canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+          if (SCREEN_TIMEOUT == 0) {
+            canvas.print(I18n::t(T_SETTINGS_TIMEOUT_NEVER));
+          } else if (SCREEN_TIMEOUT < 60000) {
+            canvas.print(String(SCREEN_TIMEOUT / 1000) + "s");
+          } else {
+            int mins = SCREEN_TIMEOUT / 60000;
+            int secs = (SCREEN_TIMEOUT % 60000) / 1000;
+            if (secs == 0) {
+              canvas.print(String(mins) + "m");
+            } else {
+              canvas.print(String(mins) + "m " + String(secs) + "s");
+            }
+          }
+          break;
+        case 3: // 正常 GPS 更新频率
+          canvas.print(I18n::t(T_SETTINGS_GPS_INT));
+          canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+          canvas.print(String(GPS_UPDATE_INTERVAL_NORMAL / 1000) + "s");
+          break;
+        case 4: // 息屏 GPS 更新频率
+          canvas.print(I18n::t(T_SETTINGS_SCROFF_GPS));
+          canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+          canvas.print(String(GPS_UPDATE_INTERVAL_SCREEN_OFF / 1000) + "s");
+          break;
+        case 5: // 关键点显示模式
+          canvas.print(I18n::t(T_SETTINGS_SHOW_POIS));
+          canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+          if (showPOIsMode == 0) canvas.print("OFF");
+          else if (showPOIsMode == 1) canvas.print("ON");
+          else canvas.print("AUTO");
+          break;
+        case 6: // 语言设置
+          canvas.print(I18n::t(T_SETTINGS_LANGUAGE));
+          canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+          canvas.print(I18n::getInstance().isChinese() ? I18n::t(T_LANG_NAME_ZH) : I18n::t(T_LANG_NAME_EN));
+          break;
       }
     }
-    y += 12;
-    
-    // 显示正常GPS更新频率选项
-    canvas.setTextColor(settingsMenuSelection == 3 ? TFT_BLUE : TFT_BLACK, TFT_WHITE);
-    canvas.setCursor(20, y);
-    canvas.print("> GPS Int : ");
-    canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-    canvas.print(String(GPS_UPDATE_INTERVAL_NORMAL / 1000) + "s");
-    y += 12;
-    
-    // 显示息屏GPS更新频率选项
-    canvas.setTextColor(settingsMenuSelection == 4 ? TFT_BLUE : TFT_BLACK, TFT_WHITE);
-    canvas.setCursor(20, y);
-    canvas.print("> ScreenOff GPS : ");
-    canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-    canvas.print(String(GPS_UPDATE_INTERVAL_SCREEN_OFF / 1000) + "s");
-    y += 12;
 
-    // 显示关键点开关
-    canvas.setTextColor(settingsMenuSelection == 5 ? TFT_BLUE : TFT_BLACK, TFT_WHITE);
-    canvas.setCursor(20, y);
-    canvas.print("> Show POIs : ");
-    canvas.setTextColor(TFT_BLACK, TFT_WHITE);
-    if (showPOIsMode == 0) canvas.print("OFF");
-    else if (showPOIsMode == 1) canvas.print("ON");
-    else canvas.print("AUTO");
-    y += 6;
-    
-    // 添加电量消耗曲线
+    // 绘制右侧滚动条
+    const int trackX = 222;
+    const int trackY = 30;
+    const int trackW = 3;
+    const int trackH = 50;
+    // 轨道背景槽
+    canvas.fillRoundRect(trackX, trackY, trackW, trackH, 1, 0xDEFB);
+    // 滑块
+    int maxOffset = SETTINGS_MENU_OPTIONS - SETTINGS_VISIBLE_ITEMS;
+    int thumbH = (trackH * SETTINGS_VISIBLE_ITEMS) / SETTINGS_MENU_OPTIONS;
+    int thumbY = trackY;
+    if (maxOffset > 0) {
+      thumbY = trackY + ((trackH - thumbH) * settingsMenuScrollOffset) / maxOffset;
+    }
+    canvas.fillRoundRect(trackX, thumbY, trackW, thumbH, 1, TFT_BLUE);
+
+    // 分割线 (菜单列表与电量图表之间)
+    canvas.drawFastHLine(10, 83, 220, 0xEF7D);
+
+    // 绘制电量消耗曲线
     if (batteryHistory.size() >= 1) {
-      y += 4;
-      
-      // 绘制电量消耗曲线标题
+      setUiFont();
       canvas.setTextColor(TFT_BLUE, TFT_WHITE);
-      canvas.setCursor(20, y);
-      canvas.print("Battery Consumption :");
-      y += 4;
+      canvas.setCursor(16, 85);
+      canvas.print(I18n::t(T_SETTINGS_BATTERY_TITLE));
       
       // 电量曲线配置
-      const int CHART_HEIGHT = 30; // 减少高度，确保不超出菜单下边框
-      const int CHART_WIDTH = SCREEN_WIDTH - 60; // 减少宽度，为左侧文字留出空间
-      const int CHART_X = 40; // 向右移动20像素，避免左侧文字超出屏幕
-      const int CHART_Y = y;
-      
-      // 绘制电量曲线（无边框）
+      const int CHART_HEIGHT = 18;
+      const int CHART_WIDTH = SCREEN_WIDTH - 64; // 为左右两侧文字留出空间
+      const int CHART_X = 40;
+      const int CHART_Y = 98;
       
       // 计算电量范围
       int minBattery = 100;
@@ -1654,20 +2031,17 @@ void drawSettingsMenu(bool should_I) {
         if (bat > maxBattery) maxBattery = bat;
       }
       
-      // 添加一些边距，确保纵轴能够适应电量值的大范围变化
       int batteryRange = maxBattery - minBattery;
       if (batteryRange < 10) {
         minBattery = max(0, minBattery - 5);
         maxBattery = min(100, maxBattery + 5);
         batteryRange = 10;
       } else {
-        // 对于大范围变化，添加更多边距以确保所有点都在屏幕内
         minBattery = max(0, static_cast<int>(minBattery - batteryRange * 0.15));
         maxBattery = min(100, static_cast<int>(maxBattery + batteryRange * 0.15));
         batteryRange = maxBattery - minBattery;
       }
       
-      // 确保电池范围至少为10，避免除以零或计算错误
       if (batteryRange < 10) {
         batteryRange = 10;
         if (minBattery == maxBattery) {
@@ -1676,9 +2050,6 @@ void drawSettingsMenu(bool should_I) {
         }
       }
       
-      // 绘制电量范围（最高值和最低值）
-      // 已移除，改为在曲线最左侧显示开始值，最右侧显示当前值
-      
       // 绘制电量折线
       int lastX = -1;
       int lastY = -1;
@@ -1686,24 +2057,13 @@ void drawSettingsMenu(bool should_I) {
       
       for (size_t i = 0; i < batteryHistory.size(); i++) {
         int battery = batteryHistory[i];
-        
-        // 计算X坐标：使用MAX_BATTERY_HISTORY作为横轴长度，从左到右绘制
         int x = CHART_X + 5 + (int)((double)i / (MAX_BATTERY_HISTORY - 1) * (CHART_WIDTH - 10));
-        
-        // 计算Y坐标（电量越高，Y值越小）
         int batY = CHART_Y + CHART_HEIGHT - 5 - (int)((battery - minBattery) / (double)batteryRange * (CHART_HEIGHT - 10));
         
-        // 如果只有一个数据点，绘制一个点
-        if (batteryHistory.size() == 1) {
-          // 不绘制圆点，仅用曲线
-        } else {
-          // 绘制折线，根据电量值选择颜色
-          if (lastX != -1 && lastY != -1) {
-            // 使用两个端点的平均电量来决定线条颜色
-            int avgBattery = (lastBattery + battery) / 2;
-            uint16_t lineColor = (avgBattery >= 20) ? TFT_BLUE : TFT_RED;
-            canvas.drawLine(lastX, lastY, x, batY, lineColor);
-          }
+        if (batteryHistory.size() > 1 && lastX != -1 && lastY != -1) {
+          int avgBattery = (lastBattery + battery) / 2;
+          uint16_t lineColor = (avgBattery >= 20) ? TFT_BLUE : TFT_RED;
+          canvas.drawLine(lastX, lastY, x, batY, lineColor);
         }
         
         lastX = x;
@@ -1716,9 +2076,10 @@ void drawSettingsMenu(bool should_I) {
         int startBattery = batteryHistory[0];
         int startX = CHART_X + 5;
         int startY = CHART_Y + CHART_HEIGHT - 5 - (int)((startBattery - minBattery) / (double)batteryRange * (CHART_HEIGHT - 10));
-        canvas.setTextSize(0);
-        canvas.setTextColor(TFT_BLACK);
-        canvas.setCursor(startX - 30, startY - 4);
+        canvas.setFont(&fonts::Font0);
+        canvas.setTextSize(1);
+        canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+        canvas.setCursor(startX - 26, startY - 4);
         canvas.print(String(startBattery) + "%");
       }
       
@@ -1727,9 +2088,10 @@ void drawSettingsMenu(bool should_I) {
         int currentBattery = batteryHistory[batteryHistory.size() - 1];
         int currentX = CHART_X + 5 + (int)((double)(batteryHistory.size() - 1) / (MAX_BATTERY_HISTORY - 1) * (CHART_WIDTH - 10));
         int currentY = CHART_Y + CHART_HEIGHT - 5 - (int)((currentBattery - minBattery) / (double)batteryRange * (CHART_HEIGHT - 10));
-        canvas.setTextSize(0);
-        canvas.setTextColor(TFT_BLACK);
-        canvas.setCursor(currentX + 5, currentY - 4);
+        canvas.setFont(&fonts::Font0);
+        canvas.setTextSize(1);
+        canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+        canvas.setCursor(currentX + 4, currentY - 4);
         canvas.print(String(currentBattery) + "%");
       }
     }
@@ -1837,11 +2199,13 @@ void nmeaDispatcher(const String &nmeaLine) {
     {"$GLGSV", parseGSV},
     {"$GAGSV", parseGSV},
     {"$BDGSV", parseGSV},
+    {"$GBGSV", parseGSV},
     {"$GNGSV", parseGSV},
     {"$GPGSA", parseGSA},
     {"$GLGSA", parseGSA},
     {"$GAGSA", parseGSA},
     {"$BDGSA", parseGSA},
+    {"$GBGSA", parseGSA},
     {"$GNGSA", parseGSA}
   };
   // Dispatch to the correct parser.
@@ -1881,7 +2245,7 @@ void parseGSV(const String &line) {
   if (line.startsWith("$GPGSV")) system = "GPS";
   else if (line.startsWith("$GLGSV")) system = "GLONASS";
   else if (line.startsWith("$GAGSV")) system = "Galileo";
-  else if (line.startsWith("$BDGSV")) system = "BeiDou";
+  else if (line.startsWith("$BDGSV") || line.startsWith("$GBGSV")) system = "BeiDou";
   else if (line.startsWith("$GNGSV")) system = "Mixed";
   else return;
   GSVSequenceState* state = getGSVState(system);
@@ -2218,8 +2582,8 @@ void drawConfig(bool should_I) {
       gpsSerial = false;
       initGPSSerial(false);
     }
-    canvas.fillRect(10, 10, SCREEN_WIDTH-20, SCREEN_HEIGHT-20, TFT_BLACK);
-    canvas.drawRect(12, 12, SCREEN_WIDTH-24, SCREEN_HEIGHT-24, TFT_GREEN);
+    canvas.fillRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_BLACK);
+    canvas.drawRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_GREEN);
     canvas.setTextColor(TFT_WHITE, TFT_BLACK);
     canvas.setTextSize(1);
     canvas.setCursor(25, 25);
@@ -2270,8 +2634,8 @@ void drawInfo(bool should_I) {
       "back to HikePod mode"
     };
     int count = sizeof(helpText) / sizeof(helpText[0]);
-    canvas.fillRect(18, 18, 204, 99, TFT_BLACK);
-    canvas.drawRect(20, 20, 200, 95, TFT_GREEN);
+    canvas.fillRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_BLACK);
+    canvas.drawRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_GREEN);
     canvas.setTextColor(TFT_WHITE, TFT_BLACK);
     canvas.setTextSize(1);
     canvas.setCursor(25, 24);
@@ -2303,8 +2667,8 @@ void drawHelp(bool should_I) {
       "[Tab] Switch to HikePod mode"
     };
     int count = sizeof(helpText) / sizeof(helpText[0]);
-    canvas.fillRect(10, 10, SCREEN_WIDTH-20, SCREEN_HEIGHT-20, TFT_BLACK);
-    canvas.drawRect(12, 12, SCREEN_WIDTH-24, SCREEN_HEIGHT-24, TFT_GREEN);
+    canvas.fillRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_BLACK);
+    canvas.drawRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_GREEN);
     canvas.setTextColor(TFT_WHITE, TFT_BLACK);
     canvas.setTextSize(1);
     int y = 19;
@@ -2339,27 +2703,220 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
   // Check if keyboard has changed state
   if(keyboardChanged) {
     if(keyboardPressed) {
-      
-      // 如果 WiFi KML Manager 窗口打开，除了 'w' 键以外不响应其他按键
-      if (httpServerMenuOpen) {
-        bool wPressed = false;
+      // 如果通用文本输入对话框打开，全权接管所有按键
+      if (inputDialogOpen) {
+        IME& ime = IME::getInstance();
+
+        // 1. ESC ('`') 退出输入法或取消当前拼写
+        bool escPressed = false;
         for (auto key : keys.word) {
-          if (key == 'w') {
-            wPressed = true;
+          if (key == '`') {
+            escPressed = true;
             break;
           }
         }
-        if (!wPressed) return; // 如果没按 'w'，直接忽略所有其他按键
+        if (escPressed) {
+          if (ime.active() && ime.composing()) {
+            ime.reset();
+            drawTextInputDialog(true);
+          } else {
+            drawTextInputDialog(false);
+          }
+          return;
+        }
+
+        // 2. Tab 键切换中英文输入法
+        if (keys.tab) {
+          ime.toggle();
+          drawTextInputDialog(true);
+          return;
+        }
+
+        // 3. 退格键 (keys.del)
+        if (keys.del) {
+          if (ime.active() && ime.composing()) {
+            String dummyOut;
+            ime.handleKey('\b', dummyOut);
+          } else if (inputDialogText.length() > 0) {
+            // UTF-8 安全退格
+            do {
+              inputDialogText.remove(inputDialogText.length() - 1);
+            } while (inputDialogText.length() > 0 && 
+                     ((uint8_t)inputDialogText[inputDialogText.length() - 1] & 0xC0) == 0x80);
+          }
+          drawTextInputDialog(true);
+          return;
+        }
+
+        // 4. 回车键 (keys.enter)
+        if (keys.enter) {
+          if (ime.active() && ime.composing()) {
+            // 正在拼写：首选候选字上屏
+            String out;
+            ime.handleKey('\n', out);
+            if (out.length() > 0) {
+              inputDialogText += out;
+            }
+            drawTextInputDialog(true);
+            return;
+          } else {
+            // 根据当前业务类型执行提交操作
+            if (currentInputType == INPUT_WAYPOINT_POI) {
+              if (inputDialogText.length() == 0) {
+                inputDialogText = I18n::t(T_TOAST_DEFAULT_POI);
+              }
+              trackingManager.addWaypoint(inputDialogText, currentLocation);
+              showStatusToast(String(I18n::t(T_TOAST_MARKED_PREFIX)) + inputDialogText);
+              Serial.printf("[POI] Added waypoint: %s at %.6f, %.6f\n",
+                            inputDialogText.c_str(), currentLocation.latitude, currentLocation.longitude);
+              drawTextInputDialog(false);
+            } else if (currentInputType == INPUT_TRACKING_FILENAME) {
+              if (inputDialogText.length() == 0) {
+                inputDialogText = "Track";
+              }
+              if (trackingManager.startTracking(inputDialogText)) {
+                renderEngine.setTrackingState(true);
+                showStatusToast(String(I18n::t(T_TOAST_STARTED_PREFIX)) + inputDialogText);
+                Serial.printf("[Tracking] Started tracking: %s\n", inputDialogText.c_str());
+                if (gnssModule.isInStandbyMode()) {
+                  gnssModule.exitStandbyMode();
+                  gnssModule.setStandbyMode(false);
+                }
+              } else {
+                showStatusToast(I18n::t(T_TOAST_START_FAILED));
+              }
+              drawTextInputDialog(false);
+            } else if (currentInputType == INPUT_RENAME_KML) {
+              if (inputDialogText.length() == 0) {
+                showStatusToast(I18n::t(T_TOAST_NAME_EMPTY));
+                drawTextInputDialog(true);
+                return;
+              }
+              String newFileName = inputDialogText;
+              if (!newFileName.endsWith(".kml") && !newFileName.endsWith(".KML")) {
+                newFileName += ".kml";
+              }
+
+              // 清洗路径，规范化为 /HikePod/filename.kml，防止双斜杠导致 SD.rename 失败
+              String cleanOld = inputDialogOriginalFile;
+              while (cleanOld.startsWith("/")) cleanOld = cleanOld.substring(1);
+              if (cleanOld.startsWith("HikePod/")) cleanOld = cleanOld.substring(8);
+              while (cleanOld.startsWith("/")) cleanOld = cleanOld.substring(1);
+
+              String cleanNew = newFileName;
+              while (cleanNew.startsWith("/")) cleanNew = cleanNew.substring(1);
+              if (cleanNew.startsWith("HikePod/")) cleanNew = cleanNew.substring(8);
+              while (cleanNew.startsWith("/")) cleanNew = cleanNew.substring(1);
+
+              String oldPath = String("/HikePod/") + cleanOld;
+              String newPath = String("/HikePod/") + cleanNew;
+              Serial.printf("[File] Rename request: %s -> %s\n", oldPath.c_str(), newPath.c_str());
+
+              if (oldPath != newPath) {
+                if (SD.exists(newPath)) {
+                  showStatusToast(I18n::t(T_TOAST_FILE_EXISTS));
+                } else if (SD.rename(oldPath, newPath)) {
+                  showStatusToast(I18n::t(T_TOAST_RENAME_OK));
+                  Serial.printf("[File] Renamed %s to %s successfully\n", oldPath.c_str(), newPath.c_str());
+                  kmlFileList = listKMLFiles();
+                  for (size_t i = 0; i < kmlFileList.size(); i++) {
+                    if (kmlFileList[i] == cleanNew) {
+                      selectedFileIndex = i;
+                      break;
+                    }
+                  }
+                } else {
+                  showStatusToast(I18n::t(T_TOAST_RENAME_FAILED));
+                  Serial.printf("[File] SD.rename failed from %s to %s!\n", oldPath.c_str(), newPath.c_str());
+                }
+              }
+              menuJustOpened = true;
+              lastFileMenuActionTime = millis();
+              drawTextInputDialog(false);
+              return;
+            }
+            return;
+          }
+        }
+
+        // 5. 普通按键输入
+        bool needRedraw = false;
+        for (auto key : keys.word) {
+          if (ime.active()) {
+            // 中文模式
+            if (!ime.composing() && (key >= '1' && key <= '8') && inputDialogText.length() == 0 && currentInputType == INPUT_WAYPOINT_POI) {
+              // 仅在途经点输入且文本为空时按 1-8：快捷词上屏
+              const char* quickWords[] = {
+                "直行", "左转", "右转", "下坡", "打卡", "营地", "水源", "危险"
+              };
+              inputDialogText += quickWords[key - '1'];
+              needRedraw = true;
+            } else {
+              String out;
+              bool consumed = ime.handleKey(key, out);
+              if (out.length() > 0) {
+                inputDialogText += out;
+                needRedraw = true;
+              } else if (consumed) {
+                needRedraw = true;
+              } else if (!ime.composing() && key >= 32 && key <= 126) {
+                inputDialogText += (char)key;
+                needRedraw = true;
+              }
+            }
+          } else {
+            // 英文模式
+            if (key >= '1' && key <= '8' && inputDialogText.length() == 0 && currentInputType == INPUT_WAYPOINT_POI) {
+              const char* quickWords[] = {
+                "Straight", "Left", "Right", "Down", "CheckIn", "Camp", "Water", "Danger"
+              };
+              inputDialogText += quickWords[key - '1'];
+              needRedraw = true;
+            } else if (key >= 32 && key <= 126) {
+              inputDialogText += (char)key;
+              needRedraw = true;
+            }
+          }
+        }
+
+        if (needRedraw) {
+          drawTextInputDialog(true);
+        }
+        return;
+      }
+
+      // 如果 WiFi KML Manager 窗口打开，响应 'w' 或 '`' (Esc) 键退出
+      if (httpServerMenuOpen) {
+        bool closeWifi = false;
+        for (auto key : keys.word) {
+          if (key == 'w' || key == '`') {
+            closeWifi = true;
+            break;
+          }
+        }
+        if (closeWifi) {
+          httpServerMenuOpen = false;
+          drawHttpServerWindow(false);
+          return;
+        }
+        return; // 如果没按 'w' 或 '`'，直接忽略所有其他按键
       }
 
       // 处理提示信息框的关闭
-      if ((gpsNoFixAlertVisible || kmlFullAlertVisible) && keys.enter) {
-        gpsNoFixAlertVisible = false;
-        kmlFullAlertVisible = false;
-        // 重新渲染界面
-        renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
-        canvas.pushSprite(0, 0);
-        return;
+      if (gpsNoFixAlertVisible || kmlFullAlertVisible || notTrackingAlertVisible) {
+        bool dismiss = keys.enter;
+        for (auto k : keys.word) {
+          if (k == '`') dismiss = true;
+        }
+        if (dismiss) {
+          gpsNoFixAlertVisible = false;
+          kmlFullAlertVisible = false;
+          notTrackingAlertVisible = false;
+          // 重新渲染界面
+          renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
+          canvas.pushSprite(0, 0);
+          return;
+        }
       }
       
       // 检查Tab键切换模式 (放在前面，确保模式切换优先)
@@ -2383,17 +2940,37 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
         }
       }
       
-      // 处理“`”键切换调试信息显示/隐藏
+      // 如果帮助菜单打开，按 'h' 或 '`' (Esc) 键退出
+      if (helpMenuVisible) {
+        bool closeHelp = false;
+        for (auto key : keys.word) {
+          if (key == 'h' || key == '`') {
+            closeHelp = true;
+            break;
+          }
+        }
+        if (closeHelp) {
+          helpMenuVisible = false;
+          drawHikePodHelpMenu(false);
+          return;
+        }
+      }
+
+      // 处理“`”键切换调试信息显示/隐藏 (仅在没有任何窗口/菜单打开时响应)
       for(auto key : keys.word) {
         if (key == '`') {
-          static unsigned long lastBacktickPress = 0;
-          const unsigned long BACKTICK_DEBOUNCE_DELAY = 200;
-          
-          unsigned long currentTime = millis();
-          if (currentTime - lastBacktickPress > BACKTICK_DEBOUNCE_DELAY) {
-            renderEngine.toggleDebugVisibility();
-            lastBacktickPress = currentTime;
-            Serial.println("Toggled debug info visibility");
+          if (!settingsMenuOpen && !helpMenuVisible && !fileSelectionMenuOpen && 
+              !httpServerMenuOpen && !inputDialogOpen && !gpsNoFixAlertVisible && 
+              !kmlFullAlertVisible && !notTrackingAlertVisible) {
+            static unsigned long lastBacktickPress = 0;
+            const unsigned long BACKTICK_DEBOUNCE_DELAY = 200;
+            
+            unsigned long currentTime = millis();
+            if (currentTime - lastBacktickPress > BACKTICK_DEBOUNCE_DELAY) {
+              renderEngine.toggleDebugVisibility();
+              lastBacktickPress = currentTime;
+              Serial.println("Toggled debug info visibility");
+            }
           }
         } else if (key == 'h' && currentMode == MODE_HIKEPOD) {
           // 切换帮助菜单 (增加 200ms 消抖)
@@ -2466,6 +3043,9 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               renderEngine.zoom3D(1.2);  // 放大20%
               lastEqualPress = currentTime;
               Serial.println("3D Zoom in");
+              if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
+                renderEngine.center3DOnLocation(currentLocation);
+              }
               renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
               canvas.pushSprite(0, 0);
             }
@@ -2481,20 +3061,23 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               renderEngine.zoom3D(0.8);  // 缩小20%
               lastMinusPress = currentTime;
               Serial.println("3D Zoom out");
+              if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
+                renderEngine.center3DOnLocation(currentLocation);
+              }
               renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
               canvas.pushSprite(0, 0);
             }
           }
-        } else if (key == ' ' && currentMode == MODE_HIKEPOD) {
-          // 空格键切换旋转中心
+        } else if ((key == 'r' || key == 'R') && currentMode == MODE_HIKEPOD) {
+          // 'r' 键切换 3D 旋转中心（起点 / 网格中心）
           if (currentViewMode == MODE_3D) {
-            static unsigned long lastSpacePress = 0;
-            const unsigned long SPACE_DEBOUNCE_DELAY = 200;
+            static unsigned long lastRPress = 0;
+            const unsigned long R_DEBOUNCE_DELAY = 200;
             
             unsigned long currentTime = millis();
-            if (currentTime - lastSpacePress > SPACE_DEBOUNCE_DELAY) {
+            if (currentTime - lastRPress > R_DEBOUNCE_DELAY) {
               renderEngine.toggleRotationCenter();
-              lastSpacePress = currentTime;
+              lastRPress = currentTime;
               renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
               canvas.pushSprite(0, 0);
             }
@@ -2511,11 +3094,11 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               renderEngine.pan3D(-PAN_STEP, 0);
             } else if (key == ',') { // 左箭头
               renderEngine.pan3D(PAN_STEP, 0);
-            } else if (key == '=') { // '+' 键用于 3D 缩放
-              renderEngine.zoom3D(1.1f);
-            } else if (key == '-') { // '-' 键用于 3D 缩放
-              renderEngine.zoom3D(0.9f);
             }
+            // 3D手动平移后解除锁定，允许自由浏览
+            renderEngine.setLocationLocked(false);
+            hasUserPanned = true;
+
             renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, pointPool, totalPoints, kmlParser ? kmlParser->getPOIPool() : nullptr, kmlParser ? kmlParser->getPOICount() : 0, showPOIsMode);
             canvas.pushSprite(0, 0);
           }
@@ -2529,6 +3112,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             settingsMenuOpen = !settingsMenuOpen;
             if (settingsMenuOpen) {
               settingsMenuSelection = 0;
+              settingsMenuScrollOffset = 0;
               drawSettingsMenu(true);
               Serial.println("Opened settings menu via handleControls");
             } else {
@@ -2554,13 +3138,41 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             lastWPress = currentTime;
             Serial.printf("WiFi KML Manager toggled: %s\n", httpServerMenuOpen ? "ON" : "OFF");
           }
+        } else if (key == 'u' && currentMode == MODE_HIKEPOD) {
+          // USB MSC 文件传输模式 (带 200ms 防抖)
+          static unsigned long lastUPress = 0;
+          const unsigned long U_DEBOUNCE_DELAY = 200;
+          
+          unsigned long currentTime = millis();
+          if (currentTime - lastUPress > U_DEBOUNCE_DELAY) {
+            lastUPress = currentTime;
+            enterUsbMscMode();
+          }
+        } else if (key == 'i' && currentMode == MODE_HIKEPOD) {
+          // 插入途经标注点 (POI)
+          static unsigned long lastIPress = 0;
+          const unsigned long I_DEBOUNCE_DELAY = 250;
+          unsigned long currentTime = millis();
+          if (currentTime - lastIPress > I_DEBOUNCE_DELAY) {
+            lastIPress = currentTime;
+            if (trackingManager.isTracking()) {
+              openTextInputDialog(INPUT_WAYPOINT_POI, I18n::t(T_DIALOG_POI_TITLE), "");
+              Serial.println("[POI] Opened waypoint input dialog");
+            } else {
+              showNotTrackingAlert();
+              Serial.println("[POI] Cannot insert POI: not in tracking mode. Press T first.");
+            }
+          }
         }
       }
       
       // 处理设置菜单交互
       if (openMenu && settingsMenuOpen) {
         for(auto key : keys.word) {
-          if (key == ';') { // 上箭头
+          if (key == '`') { // Esc 键退出设置菜单
+            drawSettingsMenu(false);
+            return;
+          } else if (key == ';') { // 上箭头
             settingsMenuSelection = (settingsMenuSelection - 1 + SETTINGS_MENU_OPTIONS) % SETTINGS_MENU_OPTIONS;
             drawSettingsMenu(true);
           } else if (key == '.') { // 下箭头
@@ -2594,6 +3206,13 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                 case 5: // Show POIs
                   showPOIsMode = (showPOIsMode + 1) % 3;
                   break;
+                case 6: // Language (中英切换并保存至 NVS)
+                  if (I18n::getInstance().isChinese()) {
+                    I18n::getInstance().setLanguage(LANG_EN);
+                  } else {
+                    I18n::getInstance().setLanguage(LANG_ZH);
+                  }
+                  break;
             }
             drawSettingsMenu(true);
           } else if (key == '/') { // 右箭头/增加当前选项值
@@ -2617,6 +3236,13 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                   break;
                 case 5: // Show POIs
                   showPOIsMode = (showPOIsMode + 1) % 3;
+                  break;
+                case 6: // Language (中英切换并保存至 NVS)
+                  if (I18n::getInstance().isChinese()) {
+                    I18n::getInstance().setLanguage(LANG_EN);
+                  } else {
+                    I18n::getInstance().setLanguage(LANG_ZH);
+                  }
                   break;
             }
             drawSettingsMenu(true);

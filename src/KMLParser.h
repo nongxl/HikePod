@@ -45,13 +45,15 @@ public:
   // POI 访问
   int getPOICount() const { return poiCount; }
   const POI* getPOIPool() const { return poiPool; }
+  int getMaxPoints() const { return maxPoints; }
   
 private:
   // 内存池相关
-  static const int MAX_POINTS = 8000; // 最大点数量
-  static const int MAX_POIS = 200;    // 最大关键点数量
+  static const int DEFAULT_MAX_POINTS = 3000; // 默认目标点数量
+  static const int MAX_POIS = 80;             // 最大关键点数量 (80 * 40 = 3.2KB)
   
   Location* pointPool; // 预分配的内存池
+  int maxPoints;       // 实际成功分配的最大容量
   int currentPointCount; // 当前点数量
   
   POI poiPool[MAX_POIS]; // 关键点池

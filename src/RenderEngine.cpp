@@ -95,7 +95,7 @@ RenderEngine::RenderEngine() :
   lastBatteryPercentage(-1),
   lastBatteryCheckTime(0),
   trackingState(false),
-  isLocationLocked(false),
+  isLocationLocked(true),
   trackingDotCounter(0),
   lastDotUpdateTime(0) {
 }
@@ -253,6 +253,10 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
   }
   
   // 2D渲染模式
+  if (isLocationLocked && currentLocation.isValid) {
+    centerOnLocation(currentLocation.latitude, currentLocation.longitude);
+  }
+
   // 更新统一的缩放参数（确保使用最新的缩放级别）
   updatePixelsPerMeter();
   
@@ -422,6 +426,14 @@ void RenderEngine::drawDebugInfo(const Location& currentLocation, int routePoint
     // 绘制Debug标题
     canvas->setCursor(startX, startY);
     canvas->println("=== GPS DEBUG ===");
+    
+    // 绘制系统内存使用情况（居右对齐，显示在电量信息下方，与Debug标题同一行）
+    char memStr[32];
+    uint32_t freeMem = esp_get_free_heap_size() / 1024;
+    snprintf(memStr, sizeof(memStr), "IdleMem: %uKB", (unsigned int)freeMem);
+    int memX = screenWidth - 10 - canvas->textWidth(memStr);
+    canvas->setCursor(memX, startY);
+    canvas->print(memStr);
     
     // 检查GPS模块是否初始化
     bool gpsInitialized = false;
@@ -666,6 +678,44 @@ void RenderEngine::drawCurrentLocation(const Location& location, const std::vect
     
     // 检查位置是否在屏幕范围内
     if (x >= -10 && x < screenWidth + 10 && y >= -10 && y < screenHeight + 10) {
+      // 绘制行进方向扇形视野标志（GPS航向 >= 0 时，类似游戏/地图软件视野）
+      if (location.course >= 0.0f) {
+        const float DEG_TO_RAD_FACTOR = 0.0174532925f;
+        const float fanRadius = 18.0f;     // 扇形半径
+        const float fanHalfAngle = 26.0f;  // 半开角 26 度（总角 52 度视野锥）
+        const float stepDeg = 4.0f;        // 插值步长
+        const uint16_t fanColor = 0xAD7F;  // 柔和淡天蓝视野填充色 (RGB: 170, 175, 255)
+        const uint16_t arcColor = 0x341F;  // 扇形边缘青亮蓝轮廓线 (RGB: 50, 130, 255)
+        
+        float startDeg = location.course - fanHalfAngle;
+        float endDeg = location.course + fanHalfAngle;
+        
+        int prevX = -1, prevY = -1;
+        int firstX = -1, firstY = -1;
+        int lastX = -1, lastY = -1;
+
+        for (float deg = startDeg; deg <= endDeg + 0.1f; deg += stepDeg) {
+          float rad = deg * DEG_TO_RAD_FACTOR;
+          int px = x + (int)roundf(fanRadius * sinf(rad));
+          int py = y - (int)roundf(fanRadius * cosf(rad));
+          
+          if (prevX != -1) {
+            canvas->fillTriangle(x, y, prevX, prevY, px, py, fanColor);
+            canvas->drawLine(prevX, prevY, px, py, arcColor);
+          } else {
+            firstX = px;
+            firstY = py;
+          }
+          prevX = px;
+          prevY = py;
+          lastX = px;
+          lastY = py;
+        }
+        // 绘制视野锥左右两边射线边框
+        if (firstX != -1) canvas->drawLine(x, y, firstX, firstY, arcColor);
+        if (lastX != -1) canvas->drawLine(x, y, lastX, lastY, arcColor);
+      }
+
       canvas->fillCircle(x, y, 3, TFT_RED);
       canvas->fillCircle(x, y, 1, TFT_WHITE);
       
@@ -682,6 +732,29 @@ void RenderEngine::drawCurrentLocation(const Location& location, const std::vect
         // 绘制白色中心
         canvas->drawLine(x - crossSize + 1, y, x + crossSize - 1, y, TFT_WHITE);
         canvas->drawLine(x, y - crossSize + 1, x, y + crossSize - 1, TFT_WHITE);
+      }
+
+      // 当航速大于 0.1km/h 时，在定位点旁边直接显示简约黑色航速文字（无底框、不显示度数）
+      if (location.speed > 0.1f) {
+        String speedStr = (location.speed < 10.0f) ? (String(location.speed, 1) + "km/h") : (String((int)roundf(location.speed)) + "km/h");
+        
+        canvas->setFont(&fonts::Font0);
+        canvas->setTextSize(1);
+        int textW = canvas->textWidth(speedStr);
+        int textH = 8;
+        
+        int textX = x + 6;
+        int textY = y - 4;
+        if (textX + textW > screenWidth - 2) {
+          textX = x - textW - 6;
+        }
+        if (textY < 2) {
+          textY = y + 6;
+        }
+        
+        canvas->setTextColor(TFT_BLACK);
+        canvas->setCursor(textX, textY);
+        canvas->print(speedStr);
       }
     } else {
       // 位置在屏幕外，计算距离最近的屏幕边缘并绘制蓝色三角形
@@ -1187,6 +1260,68 @@ void RenderEngine::pan3D(int dx, int dy) {
   pan3DY += dy;
 }
 
+void RenderEngine::center3DOnLocation(const Location& loc) {
+  if (!loc.isValid) return;
+
+  if (cachedLat0 == 0.0 && cachedLon0 == 0.0) {
+    cachedLat0 = loc.latitude;
+    cachedLon0 = loc.longitude;
+    cachedAlt0 = loc.altitude;
+    cosLat0 = cosf((float)cachedLat0 * PI / 180.0f);
+  }
+
+  // 计算旋转中心
+  float centerX = 0.0f, centerY = 0.0f;
+  if (useCenterRotation) {
+    centerX = (minWorldX + maxWorldX) / 2.0f;
+    centerY = (minWorldY + maxWorldY) / 2.0f;
+  }
+
+  float cosP = cosf((float)pitch);
+  float sinP = sinf((float)pitch);
+  float cosR = cosf((float)roll);
+  float sinR = sinf((float)roll);
+
+  float alpha = 19.47f * PI / 180.0f;
+  float gamma = 20.7f * PI / 180.0f;
+  float sinA = sinf(alpha);
+  float cosA = cosf(alpha);
+  float sinG = sinf(gamma);
+  float cosG = cosf(gamma);
+
+  const float EARTH_RADIUS_KM = 6378.137f;
+  const float DEG2RAD = PI / 180.0f;
+
+  // 转换为公里并应用中心偏移
+  float dLon = (loc.longitude - cachedLon0) * DEG2RAD;
+  float dLat = (loc.latitude - cachedLat0) * DEG2RAD;
+
+  float wx = dLon * cosLat0 * EARTH_RADIUS_KM - centerX;
+  float wy = -dLat * EARTH_RADIUS_KM - centerY;
+  float wz = (loc.altitude - cachedAlt0) * 0.001f * verticalExaggeration;
+
+  // 3D 旋转变换
+  float rx = wx * cosR + wz * sinR;
+  float rz = -wx * sinR + wz * cosR;
+  float ry = wy * cosP - rz * sinP;
+  rz = wy * sinP + rz * cosP;
+
+  // 应用投影变换
+  float sx = rx * (float)scaleFactor;
+  float sy = ry * (float)scaleFactor;
+  float sz = rz * (float)scaleFactor;
+
+  float x2d = (sx * cosG) - (sy * sinG);
+  float y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
+
+  // 屏幕投影公式为:
+  // screenX = (int)(x2d + screenWidth / 2 + pan3DX)
+  // screenY = (int)(screenHeight / 2 - y2d + pan3DY)
+  // 保持在屏幕中心 (screenWidth/2, screenHeight/2) 的解析解:
+  pan3DX = -x2d;
+  pan3DY = y2d;
+}
+
 void RenderEngine::toggleRotationCenter() {
   useCenterRotation = !useCenterRotation;
   Serial.printf("[3D] Rotation center: %s\n", useCenterRotation ? "Grid center" : "Start point");
@@ -1351,6 +1486,11 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
     return;
   }
   
+  // 如果处于定位锁定跟随状态且定位有效，自动居中3D视角到当前定位点
+  if (isLocationLocked && currentLocation.isValid) {
+    center3DOnLocation(currentLocation);
+  }
+
   canvas->fillScreen(TFT_WHITE);
   canvas->setTextColor(TFT_BLACK);
   canvas->setTextSize(1);
@@ -1897,10 +2037,64 @@ void RenderEngine::draw3DCurrentLocation(const Location& currentLocation) {
   int screenX = (int)(x2d + screenWidth / 2 + pan3DX);
   int screenY = (int)(screenHeight / 2 - y2d + pan3DY);
   
-  // 绘制蓝色标记
+  // 绘制定位标记、视野标志与航速
   if (screenX > -10 && screenX < screenWidth + 10 && screenY > -10 && screenY < screenHeight + 10) {
+      // 绘制行进方向扇形视野标志（GPS航向 >= 0 时）
+      if (currentLocation.course >= 0.0f) {
+        const float DEG_TO_RAD_FACTOR = 0.0174532925f;
+        const float fanRadius = 18.0f;
+        const float fanHalfAngle = 26.0f;
+        const float stepDeg = 4.0f;
+        const uint16_t fanColor = 0xAD7F;
+        const uint16_t arcColor = 0x341F;
+
+        float startDeg = currentLocation.course - fanHalfAngle;
+        float endDeg = currentLocation.course + fanHalfAngle;
+
+        int prevX = -1, prevY = -1;
+        int firstX = -1, firstY = -1;
+
+        for (float deg = startDeg; deg <= endDeg + 0.1f; deg += stepDeg) {
+          float rad = deg * DEG_TO_RAD_FACTOR;
+          int px = screenX + (int)roundf(fanRadius * sinf(rad));
+          int py = screenY - (int)roundf(fanRadius * cosf(rad));
+
+          if (prevX != -1) {
+            canvas->fillTriangle(screenX, screenY, prevX, prevY, px, py, fanColor);
+            canvas->drawLine(prevX, prevY, px, py, arcColor);
+          } else {
+            firstX = px;
+            firstY = py;
+          }
+          prevX = px;
+          prevY = py;
+        }
+        if (firstX != -1) canvas->drawLine(screenX, screenY, firstX, firstY, arcColor);
+        if (prevX != -1) canvas->drawLine(screenX, screenY, prevX, prevY, arcColor);
+      }
+
+      // 绘制中心定位标记
       canvas->fillCircle(screenX, screenY, 4, TFT_BLUE);
       canvas->fillCircle(screenX, screenY, 2, TFT_WHITE);
+
+      // 当航速大于 0.1km/h 时，显示纯黑简约航速文字
+      if (currentLocation.speed > 0.1f) {
+        String speedStr = (currentLocation.speed < 10.0f) ? (String(currentLocation.speed, 1) + "km/h") : (String((int)roundf(currentLocation.speed)) + "km/h");
+        canvas->setFont(&fonts::Font0);
+        canvas->setTextSize(1);
+        int textW = canvas->textWidth(speedStr);
+        int textX = screenX + 6;
+        int textY = screenY - 4;
+        if (textX + textW > screenWidth - 2) {
+          textX = screenX - textW - 6;
+        }
+        if (textY < 2) {
+          textY = screenY + 6;
+        }
+        canvas->setTextColor(TFT_BLACK);
+        canvas->setCursor(textX, textY);
+        canvas->print(speedStr);
+      }
   }
 }
 

@@ -35,23 +35,35 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 
 #### 基本操作
 
-- **[h]**：打开帮助菜单
+- **[h]**：打开帮助菜单 (双列整齐排版)
 - **[c]**：打开设置菜单 (支持亮度、超时、GPS 间隔、POI 开关等选项)
-- **[w]**：打开 WiFi KML 传输窗口 (HTTP 文件管理)
+- **[u]**：打开 USB 文件传输模式 (挂载为电脑 U 盘，即插即用高速管理 KML 与导出轨迹)
+- **[w]**：打开 WiFi KML 传输窗口 (HTTP 网页文件管理)
 - **[Space]**：锁定/解锁当前位置
-- **[t]**：切换轨迹记录模式
+- **[t]**：切换轨迹记录模式（启动时呼出输入法输入自定义名称，自动在后方拼接时间戳）
+- **[i]**：在轨迹记录模式下按 i 呼出输入法输入标记点 (POI) 并记录到 KML 中
+- **[r]**：在“选择 KML 文件”列表中按 r 重命名当前选中的文件
 - **[v]**：切换 2D / 3D 视图
 - **[TAB]**：切换到 GPS Info 详细模式
 - **[ESC]**：切换调试日志显示
 - **[+/-]**：放大 / 缩小地图 (缩放级别支持 5m 至 100km)
 - **[方向键]**：平移地图
+- **航向扇形显示**：定位点前方动态绘制青蓝色扇形视锥，直观指示当前行进方向
 
 #### 离线 KML 文件准备
 
 1. 从两步路等网站/APP 下载 KML 格式的路径文件（确保包含海拔信息）。
 2. **支持**：现在已支持显示中文文件名的文件。
-3. 将 KML 文件保存到 SD 卡的 `HikePod` 目录下，或通过 WiFi 传输。
+3. 将 KML 文件保存到 SD 卡的 `HikePod` 目录下，支持通过 USB 挂载 U 盘或 WiFi 网页上传。
 4. 加载完成后，系统会自动计算最佳比例尺并居中显示起点。
+
+#### 通过 USB 传输 KML 文件 (推荐)
+
+1. 使用 USB-C 数据线将 Cardputer 连接至电脑。
+2. 在主界面按下 **[u]** 键进入 USB 文件传输模式。
+3. 电脑将自动识别 Cardputer 为可移动磁盘（U 盘设备）。
+4. 将下载的 KML 路径文件直接拖拽或复制到 SD 卡的 `HikePod` 目录下（也可在此备份轨迹记录文件）。
+5. 传输完成后，请在电脑端**安全弹出**该磁盘，并在 Cardputer 上按下 **[u]** 或 **[ESC]** 键退出。系统将自动重新挂载 SD 卡并刷新路径列表。
 
 #### 通过 WiFi 传输 KML 文件
 
@@ -93,12 +105,17 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 - [x] 输入系统稳定性优化 (全局消抖与按键边缘检测)
 - [x] GPS Info 模式 UI 深度排版优化 (适配屏幕高度)
 - [x] KML 选择菜单 UI 优化 (增加行距与高亮修复)
+- [x] **USB 大容量存储 (MSC) 模式**：按 `u` 键将 SD 卡挂载为电脑 U 盘，支持即插即用极速管理 KML
+- [x] **帮助菜单双列排版重构**：精致适配 240x135 屏幕，信息布局更清晰美观
+- [x] **中文拼音输入法 (IME) 与途经点 (POI) 标记**：在 tracking 模式下按 `i` 呼出输入法，支持中文拼音/英文及 1-8 快捷词（直行/左转/右转/下坡/营地/水源等），实时打卡途经点
+- [x] **按 `t` 启动 Tracking 自定义名称**：呼出输入法输入路线名，自动在尾部拼接时间戳生成标准 KML 文件名
+- [x] **KML 文件列表重命名 (`r`)**：在文件选择菜单中按 `r` 键重命名 KML 文件，方便室内免 GPS 测试输入法与路线管理
+- [x] **GPS 航向扇形显示**：定位红白圆点前方动态绘制半透明青蓝色扇形视锥，直观展示实时行进方向
+- [x] **对齐两步路标准 KML 格式**：规范生成 `<ExtendedData>` 统计数据（里程、爬升、下降、平均配速）、标准样式以及 `TbuluHisPointFolder` 途经点图层与 `TbuluLineStringFolder` 轨迹线图层
 
 ### 后续计划
 1. **省电策略优化**：进一步研究息屏下的低功耗运行。
 2. **高程数据增强**：考虑支持更精细的海拔记录。
-
-### 致谢
 
 ### 致谢与来源 (Credits & Acknowledgements)
 
@@ -129,23 +146,35 @@ HikePod is an outdoor hiking navigation project based on M5Stack Cardputer ADV, 
 
 #### Basic Operations
 
-- **[h]**: Open help menu
+- **[h]**: Open help menu (Two-column layout)
 - **[c]**: Open settings menu (Brightness, Timeout, GPS interval, POI toggle, etc.)
+- **[u]**: Open USB file transfer mode (mounts SD card as PC USB disk for fast KML management)
 - **[w]**: Open WiFi KML transfer window (HTTP file management)
 - **[Space]**: Lock/unlock current position
-- **[t]**: Toggle track recording mode
+- **[t]**: Toggle track recording mode (prompts for custom route name with auto-appended timestamp)
+- **[i]**: In tracking mode, press `i` to insert POI waypoints with Chinese Pinyin IME into KML
+- **[r]**: Rename selected KML file in the file selection list
 - **[v]**: Switch between 2D and 3D views
 - **[TAB]**: Switch to detailed GPS Info mode
 - **[ESC]**: Toggle debug log display
 - **[+/-]**: Zoom in/out map (supports scales from 5m to 100km)
 - **[Arrow keys]**: Pan map / view
+- **Heading Sector**: Cyan directional fan cone drawn in front of the location marker to indicate heading
 
 #### Preparing Offline KML Files
 
 1. Download KML path files from websites/apps like 2bulu (ensure altitude data is included).
 2. **Supported**: Chinese filenames are now fully supported.
-3. Save KML files to the `HikePod` directory on the SD card or transfer via WiFi.
+3. Save KML files to the `HikePod` directory on the SD card via USB Mass Storage or WiFi.
 4. After loading, the system will automatically calculate the best scale and center on the start point.
+
+#### Transfer KML via USB (Recommended)
+
+1. Connect Cardputer to your PC using a USB-C data cable.
+2. Press **[u]** on the main screen to enter USB MSC mode.
+3. The computer will automatically recognize Cardputer as a removable USB storage device.
+4. Drag and drop downloaded KML files directly into the `HikePod` directory on the SD card.
+5. Safely eject the drive on your PC first, then press **[u]** or **[ESC]** on Cardputer to exit and reload files.
 
 #### Transfer KML via WiFi
 
@@ -187,6 +216,8 @@ HikePod is an outdoor hiking navigation project based on M5Stack Cardputer ADV, 
 - [x] Input system stability (Global debouncing & edge detection)
 - [x] GPS Info mode UI layout optimization (Fits 135px height)
 - [x] KML file menu UI enhancement (Spacing & highlight fix)
+- [x] **USB Mass Storage (MSC) mode**: Press 'u' to mount SD card as PC USB disk
+- [x] **Redesigned Two-Column Help Menu**: Clean and elegant layout on 240x135 screen
 
 ### Future Plans
 1. **Low Power Strategy**: Deep sleep and further screen-off optimizations.

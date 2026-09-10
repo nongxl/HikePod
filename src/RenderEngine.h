@@ -137,6 +137,7 @@ public:
   
   // 3D视图平移
   void pan3D(int dx, int dy);  // 平移3D视图
+  void center3DOnLocation(const Location& loc); // 3D视图对齐定位点居中
   
   // 切换旋转中心模式
   void toggleRotationCenter();  // 切换旋转中心：起点/地面网格中心

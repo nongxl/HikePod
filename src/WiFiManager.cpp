@@ -69,9 +69,9 @@ String WiFiManager::getSSID() const {
 void WiFiManager::handleFileList() {
     String html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>HikePod File Manager</title>";
     html += "<style>body{font-family:sans-serif;margin:20px;background:#f0f2f5}h1{color:#1a73e8}.card{background:white;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}table{width:100%;border-collapse:collapse;margin-top:20px}th,td{padding:12px;text-align:left;border-bottom:1px solid #ddd}th{background:#f8f9fa}tr:hover{background:#f1f3f4}.btn{padding:6px 12px;border-radius:4px;text-decoration:none;color:white;font-size:14px}.btn-del{background:#d93025}.btn-up{background:#1a73e8;border:none;padding:10px 20px;cursor:pointer}input[type=file]{margin-bottom:10px}</style></head><body>";
-    html += "<h1>HikePod KML 管理器</h1><div class='card'>";
-    html += "<h3>上传新 KML 文件</h3><form method='POST' action='/upload' enctype='multipart/form-data'><input type='file' name='upload'><br><input type='submit' value='上传' class='btn btn-up'></form>";
-    html += "<table><thead><tr><th>文件名</th><th>大小</th><th>操作</th></tr></thead><tbody>";
+    html += "<h1>HikePod KML Manager</h1><div class='card'>";
+    html += "<h3>Upload New KML File</h3><form method='POST' action='/upload' enctype='multipart/form-data'><input type='file' name='upload'><br><input type='submit' value='Upload' class='btn btn-up'></form>";
+    html += "<table><thead><tr><th>File Name</th><th>Size</th><th>Action</th></tr></thead><tbody>";
 
     File root = SD.open("/HikePod");
     if (root && root.isDirectory()) {
@@ -80,7 +80,7 @@ void WiFiManager::handleFileList() {
             String fileName = String(file.name());
             if (fileName.endsWith(".kml") || fileName.endsWith(".KML")) {
                 html += "<tr><td>" + fileName + "</td><td>" + String(file.size() / 1024) + " KB</td>";
-                html += "<td><a href='/delete?filename=" + fileName + "' class='btn btn-del' onclick='return confirm(\"确定删除?\")'>删除</a></td></tr>";
+                html += "<td><a href='/delete?filename=" + fileName + "' class='btn btn-del' onclick='return confirm(\"Are you sure to delete?\")'>Delete</a></td></tr>";
             }
             file = root.openNextFile();
         }
