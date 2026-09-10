@@ -121,6 +121,7 @@ bool hasRoute = false;
 
 // 地图浏览与跟随状态
 static bool hasUserPanned = false;  // 跟踪用户是否已手动平移操作过地图
+static bool initialPositionSet = false;  // 跟踪是否已设置初始位置
 
 // 当前位置
 Location currentLocation;
@@ -530,6 +531,10 @@ currentKmlFile = fileName; // 保存当前加载的文件名
       if (totalPoints > 0) {
         renderEngine.calculateBoundingBoxFromPool(pointPool, totalPoints);
         renderEngine.autoFitToRoute();
+        
+        // 重置用户手动平移和初始定位状态，确保新路线自动居中且视野自适应
+        hasUserPanned = false;
+        initialPositionSet = false;
         
         // 同步缩放级别和平移到交互管理器，确保后续按键逻辑同步
         interactionManager.setZoomLevel(renderEngine.getZoomLevel());
@@ -1125,7 +1130,6 @@ void loop() {
     // 检查是否需要重绘
     bool needRender = false;
     
-    static bool initialPositionSet = false;  // 跟踪是否已设置初始位置
     static Location prevLocation; // 用于跟踪GPS位置变化
     static bool prevLocationInitialized = false;  // 跟踪prevLocation是否已初始化
     

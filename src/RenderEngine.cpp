@@ -70,7 +70,7 @@ RenderEngine::RenderEngine() :
   targetViewOffsetY(0.0),
   pan3DX(0.0f),
   pan3DY(0.0f),
-  useCenterRotation(false),
+  useCenterRotation(true),
   worldPoints(nullptr),
   worldPointCount(0),
   segments(nullptr),
@@ -1361,8 +1361,9 @@ void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
   const float DEG2RAD = PI / 180.0f;
   
   worldPointCount = 0;
-  minWorldX = 1e9f; maxWorldX = -1e9f;
-  minWorldZ = 0, maxWorldZ = 0;
+  minWorldX = 1e9f;  maxWorldX = -1e9f;
+  minWorldY = 1e9f;  maxWorldY = -1e9f;
+  minWorldZ = 1e9f;  maxWorldZ = -1e9f;
   // 初始化仪表盘配置
   // 如果原始点数超过目标，进行均匀采样
   float sampleRate = (float)pointCount / targetCount;
@@ -1428,10 +1429,10 @@ void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
     float maxExtent = max(worldWidth, worldHeight);
     
     if (maxExtent > 0.001f) {
-      float screenExtent = min(screenWidth, screenHeight) * 0.9f;
+      float screenExtent = min(screenWidth, screenHeight) * 0.85f;
       scaleFactor = screenExtent / maxExtent;
       
-      if (scaleFactor < 10.0f) scaleFactor = 10.0f;
+      if (scaleFactor < 0.05f) scaleFactor = 0.05f; // 支持长达上百公里的超级大跨度
       if (scaleFactor > 5000.0f) scaleFactor = 5000.0f;
       
       Serial.printf("[3D World] Auto scale: %.2f (extent: %.3f km)\n", scaleFactor, maxExtent);
@@ -1457,11 +1458,15 @@ void RenderEngine::releaseWorldPoints() {
   }
   worldPointCount = 0;
   segmentCount = 0;
+  minWorldX = 0.0f; maxWorldX = 0.0f;
+  minWorldY = 0.0f; maxWorldY = 0.0f;
+  minWorldZ = 0.0f; maxWorldZ = 0.0f;
+  cachedLat0 = 0.0; cachedLon0 = 0.0; cachedAlt0 = 0.0;
 }
 
 void RenderEngine::invalidateWorldPoints() {
   releaseWorldPoints();
-  userScaleFactor = false;  // 重置用户缩放标志，允许自动计算缩放因子
+  reset3DView();
 }
 
 // 3D渲染核心方法实现
@@ -1778,8 +1783,10 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
 void RenderEngine::draw3DGroundPlane(float cosP, float sinP, float cosR, float sinR, float sinA, float cosA, float sinG, float cosG) {
   if (!canvas || worldPointCount == 0) return;
   
-  float gridExtent = max(maxWorldX - minWorldX, maxWorldY - minWorldY) * 0.6f;
-  if (gridExtent < 0.5f) gridExtent = 0.5f;
+  float routeExtent = max(maxWorldX - minWorldX, maxWorldY - minWorldY);
+  // 网格略微大于路径跨度（外留约10%边距），充满度约90%
+  float gridExtent = routeExtent * 0.55f;
+  if (gridExtent < 0.05f) gridExtent = 0.05f; // 支持最小50米的小跨度路径
   
   float gridCenterX = (minWorldX + maxWorldX) / 2.0f;
   float gridCenterY = (minWorldY + maxWorldY) / 2.0f;
