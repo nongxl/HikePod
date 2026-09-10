@@ -10,13 +10,16 @@ struct POI {
   Location loc;
 };
 
+// 进度回调函数类型定义 (百分比, 已解析点数, 已读字节, 总字节, 自定义数据)
+typedef void (*KMLProgressCallback)(int percent, int pointsLoaded, size_t bytesRead, size_t totalBytes, void* userData);
+
 class KMLParser {
 public:
   KMLParser();
   ~KMLParser();
   
-  // 解析KML文件
-  bool parseFile(const char* filePath);
+  // 解析KML文件（支持实时进度反馈）
+  bool parseFile(const char* filePath, KMLProgressCallback progressCallback = nullptr, void* userData = nullptr);
   
   // 获取解析后的路线点
   std::vector<Location> getRoutePoints();
@@ -67,8 +70,8 @@ private:
   Location currentPoiLoc;
   bool hasPoiLoc;
   
-  // 直接从文件解析（低内存占用，流式实现）
-  bool parseFileDirect(const char* filePath);
+  // 直接从文件解析（低内存占用，流式实现，支持进度回调）
+  bool parseFileDirect(const char* filePath, KMLProgressCallback progressCallback = nullptr, void* userData = nullptr);
   
   // 添加点到内存池
   bool addPointToPool(double lat, double lng, double alt);

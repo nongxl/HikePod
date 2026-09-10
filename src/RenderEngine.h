@@ -134,6 +134,7 @@ public:
   void increaseVerticalExaggeration();
   void decreaseVerticalExaggeration();
   void zoom3D(float factor);  // 3D缩放
+  bool update3DCameraTransition(); // 3D相机平滑过渡更新（平移阻尼与平滑缩放），返回是否有动画正在进行
   
   // 3D视图平移
   void pan3D(int dx, int dy);  // 平移3D视图
@@ -220,6 +221,7 @@ private:
   float verticalExaggeration; // 垂直放大系数
   float cameraDistance;     // 相机距离
   float scaleFactor;        // 缩放因子
+  float targetScaleFactor;  // 目标缩放因子（平滑过渡）
   bool userScaleFactor;      // 用户是否手动设置了缩放因子
   float pitch;              // 俯仰角（绕X轴）
   float roll;               // 横滚角（绕Y轴）
@@ -239,13 +241,22 @@ private:
   float targetViewOffsetX;  // 目标视角X偏移
   float targetViewOffsetY;  // 目标视角Y偏移
   
-  // 3D视图平移（用户手动调整）
-  float pan3DX;             // 3D视图X平移（像素）
-  float pan3DY;             // 3D视图Y平移（像素）
+  // 3D视图平移（用户手动调整或定位对齐跟随）
+  float pan3DX;             // 3D视图当前X平移（像素）
+  float pan3DY;             // 3D视图当前Y平移（像素）
+  float targetPan3DX;       // 3D视图目标X平移（阻尼平滑）
+  float targetPan3DY;       // 3D视图目标Y平移（阻尼平滑）
   
   // 旋转中心模式
   bool useCenterRotation;   // true: 以地面网格中心旋转, false: 以起点旋转
   
+  // 顶点单次投影变换缓存结构（消除每帧重复变换与多次深度计算）
+  struct ProjectedVertex {
+    int16_t screenX;
+    int16_t screenY;
+    float rz;
+  };
+
   // 世界坐标缓存（KML加载时计算一次）
   struct WorldPoint {
     float x;  // 公里
@@ -274,6 +285,9 @@ private:
   // 动态分配的线段索引数组
   SegmentRef* segments;
   int segmentCount;
+  
+  // 动态分配的顶点投影缓存数组
+  ProjectedVertex* projectedVertices;
   
   // 缓存的常量（加载时计算一次）
   float cosLat0;           // cos(lat0)

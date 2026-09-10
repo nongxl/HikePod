@@ -458,6 +458,72 @@ void drawFileSelectionMenu() {
   canvas.pushSprite(0, 0);
 }
 
+// KML 加载动态进度与数据渲染回调
+void onKMLProgressUpdate(int percent, int pointsLoaded, size_t bytesRead, size_t totalBytes, void* userData) {
+  const char* fName = userData ? (const char*)userData : "KML";
+  
+  // 保持 HikePod 标志性的纯白底色、1px 黑色单线边框窗口
+  int winX = 15, winY = 12;
+  int winW = SCREEN_WIDTH - 30; // 210 像素
+  int winH = SCREEN_HEIGHT - 24; // 111 像素
+  
+  canvas.fillRect(winX, winY, winW, winH, TFT_WHITE);
+  canvas.drawRect(winX, winY, winW, winH, TFT_BLACK);
+  
+  // 动态旋转指示微动画 (| / - \)
+  static const char spinnerChars[] = "|/-\\";
+  static int spinnerIdx = 0;
+  spinnerIdx = (spinnerIdx + 1) % 4;
+  
+  // 标题
+  canvas.setFont(&fonts::efontCN_12);
+  canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+  canvas.setCursor(winX + 10, winY + 8);
+  canvas.printf("正在加载路线... %c", spinnerChars[spinnerIdx]);
+  
+  // 文件名（小字显示）
+  canvas.setFont(&fonts::Font0);
+  canvas.setTextColor(0x52AA, TFT_WHITE);
+  canvas.setCursor(winX + 10, winY + 26);
+  canvas.printf("File: %.24s", fName);
+  
+  // 动态进度条
+  int barX = winX + 10;
+  int barY = winY + 38;
+  int barW = winW - 20; // 190 像素
+  int barH = 12;
+  canvas.drawRect(barX, barY, barW, barH, TFT_BLACK);
+  canvas.fillRect(barX + 1, barY + 1, barW - 2, barH - 2, 0xF7BE); // 浅灰背景
+  
+  int fillW = ((barW - 2) * percent) / 100;
+  if (fillW > 0) {
+    canvas.fillRect(barX + 1, barY + 1, fillW, barH - 2, TFT_BLACK); // 黑色填充进度条
+  }
+  
+  // 动态数据指标
+  canvas.setFont(&fonts::Font0);
+  canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+  
+  // 行1: 进度百分比与提取到的点数
+  canvas.setCursor(barX, barY + 16);
+  canvas.printf("Progress: %d%%", percent);
+  canvas.setCursor(barX + 90, barY + 16);
+  canvas.printf("Points: %d", pointsLoaded);
+  
+  // 行2: 已读文件字节大小与剩余堆内存状态
+  canvas.setCursor(barX, barY + 28);
+  if (totalBytes > 0) {
+    canvas.printf("Read: %dKB / %dKB", (int)(bytesRead / 1024), (int)(totalBytes / 1024));
+  } else {
+    canvas.printf("Read: %dKB", (int)(bytesRead / 1024));
+  }
+  canvas.setCursor(barX + 115, barY + 28);
+  canvas.printf("Mem: %dKB", (int)(esp_get_free_heap_size() / 1024));
+  
+  // 立即推送到屏幕
+  canvas.pushSprite(0, 0);
+}
+
 // 新增函数：加载选中的KML文件
 void loadSelectedKMLFile(const String& fileName) {
   String filePath = "/HikePod/" + fileName;
@@ -472,16 +538,11 @@ void loadSelectedKMLFile(const String& fileName) {
     canvas.pushSprite(0, 0);
   }
   
-  // 如果已经存在解析器，先释放旧的内存池
-currentKmlFile = fileName; // 保存当前加载的文件名
+  // 保存当前加载的文件名
+  currentKmlFile = fileName;
   
-  // 显示加载提示
-  canvas.fillScreen(TFT_BLACK);
-  canvas.setTextColor(TFT_WHITE, TFT_BLACK);
-  canvas.setTextSize(1);
-  canvas.drawCenterString("Loading KML Path...", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10);
-  canvas.drawCenterString(fileName.c_str(), SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 5);
-  canvas.pushSprite(0, 0);
+  // 绘制初始加载进度窗口（杜绝黑屏死机感）
+  onKMLProgressUpdate(0, 0, 0, 0, (void*)fileName.c_str());
   
   // 动态分配内存以节省启动时的栈空间
   if (kmlParser) {
@@ -503,7 +564,7 @@ currentKmlFile = fileName; // 保存当前加载的文件名
     return;
   }
   
-  if (kmlParser->parseFile(filePath.c_str())) {
+  if (kmlParser->parseFile(filePath.c_str(), onKMLProgressUpdate, (void*)fileName.c_str())) {
     int pointCount = kmlParser->getPointCount();
     if (pointCount > 0) {
       hasRoute = true;
@@ -1459,6 +1520,13 @@ void loop() {
       // 当文件选择菜单关闭时，重置菜单打开日志标志
       static bool menuOpenLogOutput = false;
       menuOpenLogOutput = false;
+    }
+    
+    // 3D相机平滑阻尼过渡更新：如果相机正在进行阻尼平滑动画，持续触发重绘
+    if (currentViewMode == MODE_3D) {
+      if (renderEngine.update3DCameraTransition()) {
+        needRender = true;
+      }
     }
     
     // 控制刷新率

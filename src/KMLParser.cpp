@@ -112,7 +112,7 @@ const Location* KMLParser::getPointPool() {
   return pointPool;
 }
 
-bool KMLParser::parseFileDirect(const char* filePath) {
+bool KMLParser::parseFileDirect(const char* filePath, KMLProgressCallback progressCallback, void* userData) {
   File file = SD.open(filePath);
   if (!file) {
     Serial.println("=== KML Parser: Failed to open file for streaming");
@@ -121,6 +121,11 @@ bool KMLParser::parseFileDirect(const char* filePath) {
   
   size_t fileSize = file.size();
   Serial.println("=== KML Parser: Streaming file size: " + String(fileSize) + " bytes");
+  
+  // 初始进度通知 (0%)
+  if (progressCallback) {
+    progressCallback(0, 0, 0, fileSize, userData);
+  }
   
   int estimatedPoints = fileSize / 45;
   if (maxPoints > 0 && estimatedPoints > maxPoints) {
@@ -140,7 +145,16 @@ bool KMLParser::parseFileDirect(const char* filePath) {
   bool inPoint = false;
   String currentPoiName = "";
   
+  unsigned long lastProgressTime = millis();
+  
   while (file.available()) {
+    if (progressCallback && (millis() - lastProgressTime >= 70)) {
+      size_t pos = file.position();
+      int percent = (fileSize > 0) ? (int)((pos * 100) / fileSize) : 0;
+      if (percent > 100) percent = 100;
+      progressCallback(percent, currentPointCount, pos, fileSize, userData);
+      lastProgressTime = millis();
+    }
     char c = file.read();
     if (c == '<') {
       String tag = file.readStringUntil('>');
@@ -303,6 +317,13 @@ bool KMLParser::parseFileDirect(const char* filePath) {
           double components[3];
           int compIdx = 0;
           while (file.available() && !coordEnd) {
+            if (progressCallback && (millis() - lastProgressTime >= 70)) {
+              size_t pos = file.position();
+              int percent = (fileSize > 0) ? (int)((pos * 100) / fileSize) : 0;
+              if (percent > 100) percent = 100;
+              progressCallback(percent, currentPointCount, pos, fileSize, userData);
+              lastProgressTime = millis();
+            }
             char cc = file.read();
             if (cc == '<') {
               String endTag = file.readStringUntil('>');
@@ -335,16 +356,21 @@ bool KMLParser::parseFileDirect(const char* filePath) {
     }
   }
   
+  // 最终完成进度通知 (100%)
+  if (progressCallback) {
+    progressCallback(100, currentPointCount, fileSize, fileSize, userData);
+  }
+  
   file.close();
   Serial.println("=== KML Parser: Streaming finished. Points: " + String(currentPointCount));
   Serial.printf("=== KML Parser: Final heap free: %u bytes\n", esp_get_free_heap_size());
   return currentPointCount > 0;
 }
 
-bool KMLParser::parseFile(const char* filePath) {
+bool KMLParser::parseFile(const char* filePath, KMLProgressCallback progressCallback, void* userData) {
   reset();
   Serial.println("=== KML Parser: Starting streaming parse for " + String(filePath));
-  return parseFileDirect(filePath);
+  return parseFileDirect(filePath, progressCallback, userData);
 }
 
 

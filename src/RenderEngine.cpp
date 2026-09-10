@@ -56,6 +56,7 @@ RenderEngine::RenderEngine() :
   verticalExaggeration(3.0),
   cameraDistance(500.0),
   scaleFactor(1.0),
+  targetScaleFactor(1.0),
   userScaleFactor(false),  // 初始化为自动计算
   pitch(0.0),
   roll(0.0),
@@ -70,11 +71,14 @@ RenderEngine::RenderEngine() :
   targetViewOffsetY(0.0),
   pan3DX(0.0f),
   pan3DY(0.0f),
+  targetPan3DX(0.0f),
+  targetPan3DY(0.0f),
   useCenterRotation(true),
   worldPoints(nullptr),
   worldPointCount(0),
   segments(nullptr),
   segmentCount(0),
+  projectedVertices(nullptr),
   cosLat0(1.0f),
   minWorldX(0.0f),
   maxWorldX(0.0f),
@@ -1220,21 +1224,27 @@ void RenderEngine::updateCameraOrientation(float currentPitch, float currentRoll
   const float MAX_ANGLE = 90.0f * (float)M_PI / 180.0f;
   deltaPitch = constrain(deltaPitch, -MAX_ANGLE, MAX_ANGLE);
   deltaRoll = constrain(deltaRoll, -MAX_ANGLE, MAX_ANGLE);
-  
   deltaRoll = -deltaRoll;
   
-  targetPitch = deltaPitch;
-  targetRoll = deltaRoll;
+  // 死区滤波与平滑：微弱的手部生理震颤（小于1.1度）不驱动角度晃动，抑制高频抖动
+  const float DEADBAND = 0.02f; // ~1.15度
+  if (fabs(deltaPitch - targetPitch) > DEADBAND) {
+    targetPitch = deltaPitch;
+  }
+  if (fabs(deltaRoll - targetRoll) > DEADBAND) {
+    targetRoll = deltaRoll;
+  }
   
-  const float SMOOTH_FACTOR = 0.15f;
+  const float SMOOTH_FACTOR = 0.12f;
   pitch += (targetPitch - pitch) * SMOOTH_FACTOR;
   roll += (targetRoll - roll) * SMOOTH_FACTOR;
   
-  const float VIEW_SHIFT_SCALE = 15.0f;
+  // 大幅降低微小加速度对视口的晃动拉扯（VIEW_SHIFT_SCALE 由 15.0f 降为 2.0f）
+  const float VIEW_SHIFT_SCALE = 2.0f;
   targetViewOffsetX = -accelY * VIEW_SHIFT_SCALE;
   targetViewOffsetY = accelX * VIEW_SHIFT_SCALE;
   
-  const float OFFSET_SMOOTH_FACTOR = 0.1f;
+  const float OFFSET_SMOOTH_FACTOR = 0.05f;
   viewOffsetX += (targetViewOffsetX - viewOffsetX) * OFFSET_SMOOTH_FACTOR;
   viewOffsetY += (targetViewOffsetY - viewOffsetY) * OFFSET_SMOOTH_FACTOR;
 }
@@ -1248,16 +1258,16 @@ void RenderEngine::decreaseVerticalExaggeration() {
 }
 
 void RenderEngine::zoom3D(float factor) {
-  scaleFactor *= factor;
-  if (scaleFactor < 10.0f) scaleFactor = 10.0f;
-  if (scaleFactor > 5000.0f) scaleFactor = 5000.0f;
+  targetScaleFactor *= factor;
+  if (targetScaleFactor < 0.05f) targetScaleFactor = 0.05f;
+  if (targetScaleFactor > 5000.0f) targetScaleFactor = 5000.0f;
   userScaleFactor = true;
-  Serial.printf("[3D Zoom] ScaleFactor: %.4f\n", scaleFactor);
+  Serial.printf("[3D Zoom] Target ScaleFactor: %.4f\n", targetScaleFactor);
 }
 
 void RenderEngine::pan3D(int dx, int dy) {
-  pan3DX += dx;
-  pan3DY += dy;
+  targetPan3DX += dx;
+  targetPan3DY += dy;
 }
 
 void RenderEngine::center3DOnLocation(const Location& loc) {
@@ -1306,7 +1316,7 @@ void RenderEngine::center3DOnLocation(const Location& loc) {
   float ry = wy * cosP - rz * sinP;
   rz = wy * sinP + rz * cosP;
 
-  // 应用投影变换
+  // 应用投影变换（使用当前缩放）
   float sx = rx * (float)scaleFactor;
   float sy = ry * (float)scaleFactor;
   float sz = rz * (float)scaleFactor;
@@ -1314,12 +1324,9 @@ void RenderEngine::center3DOnLocation(const Location& loc) {
   float x2d = (sx * cosG) - (sy * sinG);
   float y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
 
-  // 屏幕投影公式为:
-  // screenX = (int)(x2d + screenWidth / 2 + pan3DX)
-  // screenY = (int)(screenHeight / 2 - y2d + pan3DY)
-  // 保持在屏幕中心 (screenWidth/2, screenHeight/2) 的解析解:
-  pan3DX = -x2d;
-  pan3DY = y2d;
+  // 保持在屏幕中心的目标平移值（通过阻尼插值趋近，消除GPS微小杂讯抖动）
+  targetPan3DX = -x2d;
+  targetPan3DY = y2d;
 }
 
 void RenderEngine::toggleRotationCenter() {
@@ -1328,11 +1335,46 @@ void RenderEngine::toggleRotationCenter() {
 }
 
 void RenderEngine::reset3DView() {
-  pan3DX = 0.0f;
-  pan3DY = 0.0f;
-  scaleFactor = 1.0f;
+  pan3DX = targetPan3DX = 0.0f;
+  pan3DY = targetPan3DY = 0.0f;
+  scaleFactor = targetScaleFactor = 1.0f;
   userScaleFactor = false;
   Serial.println("[3D] View reset");
+}
+
+bool RenderEngine::update3DCameraTransition() {
+  bool changing = false;
+  
+  // 缩放平滑阻尼插值 (Lerp)
+  float scaleDiff = targetScaleFactor - scaleFactor;
+  if (fabs(scaleDiff) > 0.002f * targetScaleFactor) {
+    scaleFactor += scaleDiff * 0.25f;
+    changing = true;
+  } else if (scaleFactor != targetScaleFactor) {
+    scaleFactor = targetScaleFactor;
+    changing = true;
+  }
+  
+  // 平移平滑阻尼插值 (Lerp) - 吸收GPS定位杂讯与按键平移跳变
+  float panXDiff = targetPan3DX - pan3DX;
+  if (fabs(panXDiff) > 0.15f) {
+    pan3DX += panXDiff * 0.25f;
+    changing = true;
+  } else if (pan3DX != targetPan3DX) {
+    pan3DX = targetPan3DX;
+    changing = true;
+  }
+  
+  float panYDiff = targetPan3DY - pan3DY;
+  if (fabs(panYDiff) > 0.15f) {
+    pan3DY += panYDiff * 0.25f;
+    changing = true;
+  } else if (pan3DY != targetPan3DY) {
+    pan3DY = targetPan3DY;
+    changing = true;
+  }
+  
+  return changing;
 }
 
 void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
@@ -1419,6 +1461,16 @@ void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
   } else {
     segments = nullptr; // No segments to allocate
   }
+
+  // 分配顶点单次投影缓存数组
+  if (worldPointCount > 0) {
+    projectedVertices = new (std::nothrow) ProjectedVertex[worldPointCount];
+    if (!projectedVertices) {
+      Serial.printf("[3D] Memory allocation failed for %d projectedVertices! Free: %u\n", worldPointCount, esp_get_free_heap_size());
+    }
+  } else {
+    projectedVertices = nullptr;
+  }
   
   cachedPointPool = pointPool;
   cachedPointCount = pointCount;
@@ -1434,9 +1486,12 @@ void RenderEngine::buildWorldPoints(const Location* pointPool, int pointCount) {
       
       if (scaleFactor < 0.05f) scaleFactor = 0.05f; // 支持长达上百公里的超级大跨度
       if (scaleFactor > 5000.0f) scaleFactor = 5000.0f;
+      targetScaleFactor = scaleFactor; // 同步目标缩放
       
       Serial.printf("[3D World] Auto scale: %.2f (extent: %.3f km)\n", scaleFactor, maxExtent);
     }
+  } else {
+    targetScaleFactor = scaleFactor;
   }
   
   Serial.printf("[3D World] Built %d points from %d original (DP simplified, removed %d)\n", 
@@ -1455,6 +1510,11 @@ void RenderEngine::releaseWorldPoints() {
     delete[] segments;
     segments = nullptr;
     Serial.println("[3D] segments released");
+  }
+  if (projectedVertices) {
+    delete[] projectedVertices;
+    projectedVertices = nullptr;
+    Serial.println("[3D] projectedVertices released");
   }
   worldPointCount = 0;
   segmentCount = 0;
@@ -1491,9 +1551,13 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
     return;
   }
   
-  // 如果处于定位锁定跟随状态且定位有效，自动居中3D视角到当前定位点
+  // 更新相机阻尼平滑插值（缩放、平移等）
+  update3DCameraTransition();
+
+  // 如果处于定位锁定跟随状态且定位有效，自动居中3D视角到当前定位点（平滑对齐目标）
   if (isLocationLocked && currentLocation.isValid) {
     center3DOnLocation(currentLocation);
+    update3DCameraTransition();
   }
 
   canvas->fillScreen(TFT_WHITE);
@@ -1518,6 +1582,8 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
     centerY = (minWorldY + maxWorldY) / 2.0f;
   }
   
+  // 1. 顶点单次投影变换与缓存（Single-Pass Vertex Transform Cache）
+  // 彻底消除反复对同一端点进行重复 3D 旋转与投影的计算
   float minZ = 1e9f, maxZ = -1e9f;
   for (int i = 0; i < worldPointCount; i++) {
     float wx = worldPoints[i].x - centerX;
@@ -1531,86 +1597,54 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
     
     if (rz < minZ) minZ = rz;
     if (rz > maxZ) maxZ = rz;
+    
+    float sx = rx * (float)scaleFactor;
+    float sy = ry * (float)scaleFactor;
+    float sz = rz * (float)scaleFactor;
+    
+    float x2d = (sx * cosG) - (sy * sinG);
+    float y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
+    
+    if (projectedVertices) {
+      projectedVertices[i].screenX = (int16_t)(x2d + screenWidth / 2 + pan3DX);
+      projectedVertices[i].screenY = (int16_t)(screenHeight / 2 - y2d + pan3DY);
+      projectedVertices[i].rz = rz;
+    }
   }
   float zRange = maxZ - minZ;
   if (zRange < 0.001f) zRange = 1.0f;
   
-  for (int i = 0; i < segmentCount; i++) {
-    int i1 = segments[i].i1;
-    int i2 = segments[i].i2;
-    
-    float wx1 = worldPoints[i1].x - centerX;
-    float wy1 = worldPoints[i1].y - centerY;
-    float wz1 = worldPoints[i1].z;
-    float wx2 = worldPoints[i2].x - centerX;
-    float wy2 = worldPoints[i2].y - centerY;
-    float wz2 = worldPoints[i2].z;
-    
-    float rx1 = wx1 * cosR + wz1 * sinR;
-    float rz1 = -wx1 * sinR + wz1 * cosR;
-    float ry1 = wy1 * cosP - rz1 * sinP;
-    rz1 = wy1 * sinP + rz1 * cosP;
-    
-    float rx2 = wx2 * cosR + wz2 * sinR;
-    float rz2 = -wx2 * sinR + wz2 * cosR;
-    float ry2 = wy2 * cosP - rz2 * sinP;
-    rz2 = wy2 * sinP + rz2 * cosP;
-    
-    segments[i].depth = (rz1 + rz2) / 2.0f;
-  }
-  
-  for (int i = 0; i < segmentCount - 1; i++) {
-    for (int j = i + 1; j < segmentCount; j++) {
-      if (segments[j].depth > segments[i].depth) {
-        SegmentRef temp = segments[i];
-        segments[i] = segments[j];
-        segments[j] = temp;
-      }
+  // 2. 线段深度计算（直接复用顶点缓存的 rz，零三角计算）
+  if (projectedVertices) {
+    for (int i = 0; i < segmentCount; i++) {
+      int i1 = segments[i].i1;
+      int i2 = segments[i].i2;
+      segments[i].depth = (projectedVertices[i1].rz + projectedVertices[i2].rz) * 0.5f;
     }
   }
   
+  // 3. 线段深度排序：使用 O(N log N) std::sort 代替旧有的 O(N^2) 冒泡排序
+  if (segments && segmentCount > 1) {
+    std::sort(segments, segments + segmentCount, [](const SegmentRef& a, const SegmentRef& b) {
+      return a.depth > b.depth;
+    });
+  }
+  
+  // 4. 线段绘制：直接使用顶点投影缓存的屏幕坐标
   for (int i = 0; i < segmentCount; i++) {
     int i1 = segments[i].i1;
     int i2 = segments[i].i2;
     
-    float wx1 = worldPoints[i1].x - centerX;
-    float wy1 = worldPoints[i1].y - centerY;
-    float wz1 = worldPoints[i1].z;
-    float wx2 = worldPoints[i2].x - centerX;
-    float wy2 = worldPoints[i2].y - centerY;
-    float wz2 = worldPoints[i2].z;
+    int screenX1 = projectedVertices ? projectedVertices[i1].screenX : 0;
+    int screenY1 = projectedVertices ? projectedVertices[i1].screenY : 0;
+    int screenX2 = projectedVertices ? projectedVertices[i2].screenX : 0;
+    int screenY2 = projectedVertices ? projectedVertices[i2].screenY : 0;
     
-    float rx1 = wx1 * cosR + wz1 * sinR;
-    float rz1 = -wx1 * sinR + wz1 * cosR;
-    float ry1 = wy1 * cosP - rz1 * sinP;
-    rz1 = wy1 * sinP + rz1 * cosP;
-    
-    float rx2 = wx2 * cosR + wz2 * sinR;
-    float rz2 = -wx2 * sinR + wz2 * cosR;
-    float ry2 = wy2 * cosP - rz2 * sinP;
-    rz2 = wy2 * sinP + rz2 * cosP;
-    
-    float sx1 = rx1 * (float)scaleFactor;
-    float sy1 = ry1 * (float)scaleFactor;
-    float sz1 = rz1 * (float)scaleFactor;
-    float sx2 = rx2 * (float)scaleFactor;
-    float sy2 = ry2 * (float)scaleFactor;
-    float sz2 = rz2 * (float)scaleFactor;
-    
-    float x2d1 = (sx1 * cosG) - (sy1 * sinG);
-    float y2d1 = -(sx1 * sinG * sinA) - (sy1 * cosG * sinA) + (sz1 * cosA);
-    float x2d2 = (sx2 * cosG) - (sy2 * sinG);
-    float y2d2 = -(sx2 * sinG * sinA) - (sy2 * cosG * sinA) + (sz2 * cosA);
-    
-    int screenX1 = (int)(x2d1 + screenWidth / 2 + pan3DX);
-    int screenY1 = (int)(screenHeight / 2 - y2d1 + pan3DY);
-    int screenX2 = (int)(x2d2 + screenWidth / 2 + pan3DX);
-    int screenY2 = (int)(screenHeight / 2 - y2d2 + pan3DY);
-    
-    if (screenX1 < -50 || screenX1 > screenWidth + 50 ||
-        screenY1 < -50 || screenY1 > screenHeight + 50 ||
-        screenX2 < -50 || screenX2 > screenWidth + 50 ||
-        screenY2 < -50 || screenY2 > screenHeight + 50) {
+    // 快速视口粗筛：如果线段完全在屏幕外较远处，跳过底层绘制
+    if ((screenX1 < -50 && screenX2 < -50) || 
+        (screenX1 > screenWidth + 50 && screenX2 > screenWidth + 50) ||
+        (screenY1 < -50 && screenY2 < -50) || 
+        (screenY1 > screenHeight + 50 && screenY2 > screenHeight + 50)) {
       continue;
     }
     
@@ -1634,48 +1668,19 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
     canvas->drawLine(screenX1, screenY1, screenX2, screenY2, color);
   }
   
-  if (worldPointCount > 0) {
-    float wx = worldPoints[0].x - centerX;
-    float wy = worldPoints[0].y - centerY;
-    float wz = worldPoints[0].z;
+  // 5. 绘制起点与终点标记（直接复用顶点投影缓存）
+  if (worldPointCount > 0 && projectedVertices) {
+    int startScreenX = projectedVertices[0].screenX;
+    int startScreenY = projectedVertices[0].screenY;
+    if (startScreenX > -10 && startScreenX < screenWidth + 10 && startScreenY > -10 && startScreenY < screenHeight + 10) {
+      canvas->fillCircle(startScreenX, startScreenY, 3, TFT_GREEN);
+    }
     
-    float rx = wx * cosR + wz * sinR;
-    float rz = -wx * sinR + wz * cosR;
-    float ry = wy * cosP - rz * sinP;
-    rz = wy * sinP + rz * cosP;
-    
-    float sx = rx * (float)scaleFactor;
-    float sy = ry * (float)scaleFactor;
-    float sz = rz * (float)scaleFactor;
-    
-    float x2d = (sx * cosG) - (sy * sinG);
-    float y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
-    
-    int screenX = (int)(x2d + screenWidth / 2 + pan3DX);
-    int screenY = (int)(screenHeight / 2 - y2d + pan3DY);
-    
-    canvas->fillCircle(screenX, screenY, 3, TFT_GREEN);
-    
-    wx = worldPoints[worldPointCount - 1].x - centerX;
-    wy = worldPoints[worldPointCount - 1].y - centerY;
-    wz = worldPoints[worldPointCount - 1].z;
-    
-    rx = wx * cosR + wz * sinR;
-    rz = -wx * sinR + wz * cosR;
-    ry = wy * cosP - rz * sinP;
-    rz = wy * sinP + rz * cosP;
-    
-    sx = rx * (float)scaleFactor;
-    sy = ry * (float)scaleFactor;
-    sz = rz * (float)scaleFactor;
-    
-    x2d = (sx * cosG) - (sy * sinG);
-    y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
-    
-    screenX = (int)(x2d + screenWidth / 2 + pan3DX);
-    screenY = (int)(screenHeight / 2 - y2d + pan3DY);
-    
-    canvas->fillCircle(screenX, screenY, 3, TFT_RED);
+    int endScreenX = projectedVertices[worldPointCount - 1].screenX;
+    int endScreenY = projectedVertices[worldPointCount - 1].screenY;
+    if (endScreenX > -10 && endScreenX < screenWidth + 10 && endScreenY > -10 && endScreenY < screenHeight + 10) {
+      canvas->fillCircle(endScreenX, endScreenY, 3, TFT_RED);
+    }
   }
   
   draw3DGroundPlane(cosP, sinP, cosR, sinR, sinA, cosA, sinG, cosG);
@@ -1949,20 +1954,8 @@ void RenderEngine::draw3DVerticalLines(float cosP, float sinP, float cosR, float
     
     if (wz < 0.01f) continue;
     
-    float rx = wx * cosR + wz * sinR;
-    float rz = -wx * sinR + wz * cosR;
-    float ry = wy * cosP - rz * sinP;
-    rz = wy * sinP + rz * cosP;
-    
-    float sx = rx * (float)scaleFactor;
-    float sy = ry * (float)scaleFactor;
-    float sz = rz * (float)scaleFactor;
-    
-    float x2d = (sx * cosG) - (sy * sinG);
-    float y2d = -(sx * sinG * sinA) - (sy * cosG * sinA) + (sz * cosA);
-    
-    int screenX = (int)(x2d + screenWidth / 2 + pan3DX);
-    int screenY = (int)(screenHeight / 2 - y2d + pan3DY);
+    int screenX = projectedVertices ? projectedVertices[i].screenX : 0;
+    int screenY = projectedVertices ? projectedVertices[i].screenY : 0;
     
     float grx = wx * cosR;
     float grz = -wx * sinR;
@@ -1980,6 +1973,7 @@ void RenderEngine::draw3DVerticalLines(float cosP, float sinP, float cosR, float
     int groundScreenY = (int)(screenHeight / 2 - gy2d + pan3DY);
     
     if (screenX > -50 && screenX < screenWidth + 50 && screenY > -50 && screenY < screenHeight + 50) {
+      float rz = projectedVertices ? projectedVertices[i].rz : 0.0f;
       float depthNorm = (rz - minZ) / zRange;
       if (depthNorm < 0.0f) depthNorm = 0.0f;
       if (depthNorm > 1.0f) depthNorm = 1.0f;
