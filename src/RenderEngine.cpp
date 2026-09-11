@@ -318,7 +318,13 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
   if (showPOIsMode == 1) {
     drawPOIs(poiPool, poiCount, true);
   } else if (showPOIsMode == 2) {
-    drawPOIsAuto(poiPool, poiCount, currentLocation, (pointPool != nullptr && pointCount > 0) ? pointPool : routePoints.data(), (pointPool != nullptr && pointCount > 0) ? pointCount : routePoints.size());
+    const Location* refPoints = (pointPool != nullptr && pointCount > 0) ? pointPool : routePoints.data();
+    int refCount = (pointPool != nullptr && pointCount > 0) ? pointCount : routePoints.size();
+    if (refCount < 2 && trackPoints.size() >= 2) {
+      refPoints = trackPoints.data();
+      refCount = trackPoints.size();
+    }
+    drawPOIsAuto(poiPool, poiCount, currentLocation, refPoints, refCount);
   }
   
   // 绘制坐标信息
@@ -1810,6 +1816,10 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
     if (showPOIsMode == 2 && currentLocation.isValid) {
         const Location* dataPoints = (pointPool != nullptr && pointCount > 0) ? pointPool : routePoints.data();
         int dataPointCount = (pointPool != nullptr && pointCount > 0) ? pointCount : routePoints.size();
+        if (dataPointCount < 2 && trackPoints.size() >= 2) {
+            dataPoints = trackPoints.data();
+            dataPointCount = trackPoints.size();
+        }
         
         if (dataPointCount >= 2) {
             // 更新缓存
@@ -1844,6 +1854,22 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
                             nextIdx = i;
                         }
                     }
+                }
+            }
+        } else {
+            // 无参考轨迹线时：按与当前位置直线距离最近筛选 1~2 个 POI
+            float minDist1 = 1e9f;
+            float minDist2 = 1e9f;
+            for (int i = 0; i < poiCount; i++) {
+                float d = calculateDistance(currentLocation, poiPool[i].loc);
+                if (d < minDist1) {
+                    minDist2 = minDist1;
+                    nextIdx = prevIdx;
+                    minDist1 = d;
+                    prevIdx = i;
+                } else if (d < minDist2) {
+                    minDist2 = d;
+                    nextIdx = i;
                 }
             }
         }
@@ -1881,11 +1907,13 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
             canvas->drawLine(screenX, screenY, screenX, screenY - 8, TFT_BLACK);
             
             if (poiPool[i].name != "") {
+                canvas->setFont(&fonts::efontCN_12);
                 canvas->setTextColor(TFT_BLACK);
                 canvas->drawCenterString(poiPool[i].name, screenX, screenY - 20);
             }
         }
     }
+    canvas->setFont(&fonts::Font0);
   }
   
   // 绘制 3D 当前位置
@@ -2616,7 +2644,36 @@ void RenderEngine::simplifyPathDouglasPeucker(WorldPoint* points, int& count, fl
   delete[] keep;
 }
 void RenderEngine::drawPOIsAuto(const POI* poiPool, int poiCount, const Location& currentLocation, const Location* pointPool, int pointCount) {
-  if (!poiPool || poiCount <= 0 || !pointPool || pointCount < 2 || !currentLocation.isValid) return;
+  if (!poiPool || poiCount <= 0 || !currentLocation.isValid) return;
+
+  // 如果参考轨迹线点数不足2个（如纯tracking刚开始或无预载路线），回退到按直线距离最近算法选取最近的 1~2 个 POI
+  if (!pointPool || pointCount < 2) {
+    int closestIdx1 = -1;
+    int closestIdx2 = -1;
+    float minDist1 = 1e9f;
+    float minDist2 = 1e9f;
+    for (int i = 0; i < poiCount; i++) {
+      float d = calculateDistance(currentLocation, poiPool[i].loc);
+      if (d < minDist1) {
+        minDist2 = minDist1;
+        closestIdx2 = closestIdx1;
+        minDist1 = d;
+        closestIdx1 = i;
+      } else if (d < minDist2) {
+        minDist2 = d;
+        closestIdx2 = i;
+      }
+    }
+    if (closestIdx1 != -1) {
+      POI temp[1] = {poiPool[closestIdx1]};
+      drawPOIs(temp, 1, true);
+    }
+    if (closestIdx2 != -1 && closestIdx2 != closestIdx1) {
+      POI temp[1] = {poiPool[closestIdx2]};
+      drawPOIs(temp, 1, true);
+    }
+    return;
+  }
 
   // 检测并更新缓存
   if (lastPoiPoolPtr != poiPool || lastPoiCount != poiCount || lastPointPoolPtr != pointPool || lastPointCount != pointCount) {
