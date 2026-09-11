@@ -186,6 +186,8 @@ const int SETTINGS_MENU_OPTIONS = 8; // 设置选项数量（文件 + 亮度 + �
 String currentKmlFile = ""; // 当前加载的 KML 文件名
 int showPOIsMode = 2;      // 关键点显示模式 (0:OFF, 1:ON, 2:AUTO)
 void saveGPSModuleConfig(GPSModuleType mod, int rx, int tx, int baud = 115200);
+void saveCommonSettings();
+void saveVerticalExaggeration(float v);
 
 // 动态合并 KML 文件中的预置 POI 与 Tracking 过程中实时记录的 Waypoint POI
 static std::vector<POI> activePOIList;
@@ -632,6 +634,7 @@ void loadSelectedKMLFile(const String& fileName) {
     if (pointCount > 0) {
       hasRoute = true;
       Serial.println("KML file loaded successfully with " + String(pointCount) + " points");
+      saveCommonSettings(); // 保存当前 KML 路线文件名到 NVS
       
       // 检查是否达到点数上限
       if (kmlParser->isMemoryFull()) {
@@ -952,9 +955,10 @@ void setup() {
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // 启用键盘 - Cardputer ADV正确方式
 
-  // 从 NVS 加载用户保存的 GPS 硬件模块配置
+  // 从 NVS 加载用户保存的设置与硬件模块配置
   Preferences prefs;
   if (prefs.begin("hikepod", true)) {
+    // 1. GPS 硬件模块
     uint8_t savedMod = prefs.getUChar("gps_mod", 0xFF);
     if (savedMod != 0xFF && savedMod <= 2) {
       currentGpsModule = (GPSModuleType)savedMod;
@@ -962,6 +966,41 @@ void setup() {
       gpsTxPin = prefs.getInt("gps_tx", -1);
       gpsBaud = prefs.getInt("gps_baud", 115200);
       Serial.printf("[NVS] Loaded GPS module: %d, RX: %d, TX: %d, Baud: %d\n", currentGpsModule, gpsRxPin, gpsTxPin, gpsBaud);
+    }
+    // 2. 屏幕亮度
+    if (prefs.isKey("brightness")) {
+      screenBrightness = prefs.getUChar("brightness", 64);
+      screenBrightness = constrain(screenBrightness, BRIGHTNESS_MIN, BRIGHTNESS_MAX);
+      Serial.printf("[NVS] Loaded screenBrightness: %d\n", screenBrightness);
+    }
+    // 3. 屏幕超时时间
+    if (prefs.isKey("scr_timeout")) {
+      SCREEN_TIMEOUT = prefs.getULong("scr_timeout", 30000);
+      SCREEN_TIMEOUT = min(SCREEN_TIMEOUT, 600000UL);
+      Serial.printf("[NVS] Loaded SCREEN_TIMEOUT: %lu\n", SCREEN_TIMEOUT);
+    }
+    // 4. 正常 GPS 更新频率
+    if (prefs.isKey("gps_int_norm")) {
+      GPS_UPDATE_INTERVAL_NORMAL = prefs.getULong("gps_int_norm", 2000);
+      GPS_UPDATE_INTERVAL_NORMAL = constrain(GPS_UPDATE_INTERVAL_NORMAL, 500UL, 10000UL);
+      Serial.printf("[NVS] Loaded GPS_UPDATE_INTERVAL_NORMAL: %lu\n", GPS_UPDATE_INTERVAL_NORMAL);
+    }
+    // 5. 息屏 GPS 更新频率
+    if (prefs.isKey("gps_int_off")) {
+      GPS_UPDATE_INTERVAL_SCREEN_OFF = prefs.getULong("gps_int_off", 10000);
+      GPS_UPDATE_INTERVAL_SCREEN_OFF = constrain(GPS_UPDATE_INTERVAL_SCREEN_OFF, 1000UL, 30000UL);
+      Serial.printf("[NVS] Loaded GPS_UPDATE_INTERVAL_SCREEN_OFF: %lu\n", GPS_UPDATE_INTERVAL_SCREEN_OFF);
+    }
+    // 6. 关键点显示模式 (0:OFF, 1:ON, 2:AUTO)
+    if (prefs.isKey("show_pois")) {
+      uint8_t sp = prefs.getUChar("show_pois", 2);
+      showPOIsMode = (sp <= 2) ? sp : 2;
+      Serial.printf("[NVS] Loaded showPOIsMode: %d\n", showPOIsMode);
+    }
+    // 7. 上次选中的 KML 轨迹文件
+    if (prefs.isKey("last_kml")) {
+      currentKmlFile = prefs.getString("last_kml", "");
+      Serial.printf("[NVS] Loaded last_kml: %s\n", currentKmlFile.c_str());
     }
     prefs.end();
   }
@@ -1081,6 +1120,28 @@ void setup() {
     
     // GPS模块将在用户按下s键时通过initGPSSerial函数初始化
     // 这样可以避免状态不一致的问题
+    
+    // 恢复 3D 垂直放大系数
+    if (prefs.begin("hikepod", true)) {
+      if (prefs.isKey("v_exag")) {
+        float savedVExag = prefs.getFloat("v_exag", 1.5f);
+        renderEngine.setVerticalExaggeration(savedVExag);
+        Serial.printf("[NVS] Loaded vertical exaggeration: %.1f\n", savedVExag);
+      }
+      prefs.end();
+    }
+
+    // 尝试自动恢复上次打开的 KML 路线
+    if (sdInitialized && currentKmlFile.length() > 0) {
+      String filePath = "/HikePod/" + currentKmlFile;
+      if (SD.exists(filePath.c_str())) {
+        Serial.printf("[NVS] Auto-loading last route: %s\n", currentKmlFile.c_str());
+        loadSelectedKMLFile(currentKmlFile);
+      } else {
+        Serial.printf("[NVS] Last KML file not found: %s\n", filePath.c_str());
+        currentKmlFile = "";
+      }
+    }
     
     // 初始化屏幕
   if (currentMode == MODE_GPS_INFO) {
@@ -2419,6 +2480,34 @@ void saveGPSModuleConfig(GPSModuleType mod, int rx, int tx, int baud) {
   gpsSerialState = GPS_ON;
 }
 
+// 保存通用设置项（亮度、息屏超时、GPS采样率、关键点显示模式、最近KML文件）
+void saveCommonSettings() {
+  Preferences prefs;
+  if (prefs.begin("hikepod", false)) {
+    prefs.putUChar("brightness", (uint8_t)screenBrightness);
+    prefs.putULong("scr_timeout", SCREEN_TIMEOUT);
+    prefs.putULong("gps_int_norm", GPS_UPDATE_INTERVAL_NORMAL);
+    prefs.putULong("gps_int_off", GPS_UPDATE_INTERVAL_SCREEN_OFF);
+    prefs.putUChar("show_pois", (uint8_t)showPOIsMode);
+    if (currentKmlFile.length() > 0) {
+      prefs.putString("last_kml", currentKmlFile);
+    }
+    prefs.end();
+    Serial.printf("[NVS] Settings saved: brightness=%d, timeout=%lu, gps_norm=%lu, gps_off=%lu, show_pois=%d, kml=%s\n",
+                  screenBrightness, SCREEN_TIMEOUT, GPS_UPDATE_INTERVAL_NORMAL, GPS_UPDATE_INTERVAL_SCREEN_OFF, showPOIsMode, currentKmlFile.c_str());
+  }
+}
+
+// 保存 3D 垂直放大系数
+void saveVerticalExaggeration(float v) {
+  Preferences prefs;
+  if (prefs.begin("hikepod", false)) {
+    prefs.putFloat("v_exag", v);
+    prefs.end();
+    Serial.printf("[NVS] Saved vertical exaggeration: %.1f\n", v);
+  }
+}
+
 /*    Open or close the GPS UART serial console.
 */
 void initGPSSerial(bool should_I) {
@@ -3506,6 +3595,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
           unsigned long currentTime = millis();
           if (currentTime - lastBracketPress > BRACKET_DEBOUNCE_DELAY) {
             renderEngine.increaseVerticalExaggeration();
+            saveVerticalExaggeration(renderEngine.getVerticalExaggeration());
             lastBracketPress = currentTime;
             Serial.println("Increased vertical exaggeration");
             // 重新渲染界面
@@ -3520,6 +3610,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
           unsigned long currentTime = millis();
           if (currentTime - lastBracketPress2 > BRACKET_DEBOUNCE_DELAY2) {
             renderEngine.decreaseVerticalExaggeration();
+            saveVerticalExaggeration(renderEngine.getVerticalExaggeration());
             lastBracketPress2 = currentTime;
             Serial.println("Decreased vertical exaggeration");
             // 重新渲染界面
@@ -3699,24 +3790,29 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                     screenBrightness = BRIGHTNESS_MIN;
                   }
                   M5Cardputer.Display.setBrightness(screenBrightness);
+                  saveCommonSettings();
                   break;
                 case 2: // Screen Timeout
                   if (SCREEN_TIMEOUT > 0) {
                     SCREEN_TIMEOUT = (SCREEN_TIMEOUT <= 30000) ? 0UL : SCREEN_TIMEOUT - 30000;
                   }
+                  saveCommonSettings();
                   break;
                 case 3: // 正常GPS更新频率
                   if (GPS_UPDATE_INTERVAL_NORMAL > 500UL) {
                     GPS_UPDATE_INTERVAL_NORMAL = max(GPS_UPDATE_INTERVAL_NORMAL - 1000, 500UL);
                   }
+                  saveCommonSettings();
                   break;
                 case 4: // 息屏GPS更新频率
                   if (GPS_UPDATE_INTERVAL_SCREEN_OFF > 1000UL) {
                     GPS_UPDATE_INTERVAL_SCREEN_OFF = max(GPS_UPDATE_INTERVAL_SCREEN_OFF - 2000, 1000UL);
                   }
+                  saveCommonSettings();
                   break;
                 case 5: // Show POIs
-                  showPOIsMode = (showPOIsMode + 1) % 3;
+                  showPOIsMode = (showPOIsMode - 1 + 3) % 3;
+                  saveCommonSettings();
                   break;
                 case 6: // GPS Module
                   currentGpsModule = (GPSModuleType)((currentGpsModule - 1 + 3) % 3);
@@ -3746,18 +3842,23 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                     screenBrightness = BRIGHTNESS_MAX;
                   }
                   M5Cardputer.Display.setBrightness(screenBrightness);
+                  saveCommonSettings();
                   break;
                 case 2: // Screen Timeout
                   SCREEN_TIMEOUT = min(SCREEN_TIMEOUT + 30000, 600000UL);
+                  saveCommonSettings();
                   break;
                 case 3: // 正常GPS更新频率
                   GPS_UPDATE_INTERVAL_NORMAL = min(GPS_UPDATE_INTERVAL_NORMAL + 1000, 10000UL);
+                  saveCommonSettings();
                   break;
                 case 4: // 息屏GPS更新频率
                   GPS_UPDATE_INTERVAL_SCREEN_OFF = min(GPS_UPDATE_INTERVAL_SCREEN_OFF + 2000, 30000UL);
+                  saveCommonSettings();
                   break;
                 case 5: // Show POIs
                   showPOIsMode = (showPOIsMode + 1) % 3;
+                  saveCommonSettings();
                   break;
                 case 6: // GPS Module
                   currentGpsModule = (GPSModuleType)((currentGpsModule + 1) % 3);
@@ -3811,6 +3912,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             }
           } else if (settingsMenuSelection == 5) { // Show POIs
             showPOIsMode = (showPOIsMode + 1) % 3;
+            saveCommonSettings();
             drawSettingsMenu(true);
           } else if (settingsMenuSelection == 6) { // GPS 模块选择详细弹窗
             drawSettingsMenu(false);

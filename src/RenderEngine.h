@@ -142,6 +142,7 @@ public:
   void updateCameraOrientation(float currentPitch, float currentRoll, float accelX, float accelY);
   void increaseVerticalExaggeration();
   void decreaseVerticalExaggeration();
+  float getVerticalExaggeration() const { return verticalExaggeration; }
   void zoom3D(float factor);  // 3D缩放
   bool update3DCameraTransition(); // 3D相机平滑过渡更新（平移阻尼与平滑缩放），返回是否有动画正在进行
   
