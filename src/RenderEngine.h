@@ -329,6 +329,9 @@ private:
   // 绘制当前位置
   void drawCurrentLocation(const Location& location, const std::vector<Location>& routePoints);
   
+  // 绘制航向渐变蓝色扇形视野锥
+  void drawCourseHeadingCone(int cx, int cy, float courseDeg);
+  
   // 绘制坐标信息
   void drawCoordinateInfo(const Location& location);
   

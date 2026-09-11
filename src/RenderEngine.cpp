@@ -776,6 +776,48 @@ void RenderEngine::drawRouteFromPool(const Location* pointPool, int pointCount) 
   }
 }
 
+// 绘制航向渐变蓝色扇形视野锥（末端变淡融入背景，整体呈纯净渐变天蓝色）
+void RenderEngine::drawCourseHeadingCone(int cx, int cy, float courseDeg) {
+  if (courseDeg < 0.0f) return;
+
+  const float DEG_TO_RAD_FACTOR = 0.0174532925f;
+  const float R_MAX = 24.0f;          // 扇形末端最大半径
+  const float R_MIN = 3.5f;           // 扇形根部最小半径（从定位圆点边缘展开）
+  const float FAN_HALF_ANGLE = 28.0f; // 半张角 28 度（总张角 56 度，与主流现代地图对齐）
+  const float STEP_DEG = 3.5f;        // 弧度逼近步长
+  const int NUM_BANDS = 14;           // 径向渐变分层数，层间距极小带来丝滑过渡
+
+  float startDeg = courseDeg - FAN_HALF_ANGLE;
+  float endDeg = courseDeg + FAN_HALF_ANGLE;
+
+  // 自外向内采用画家算法逐层绘制同心扇形阶梯，外浅内深形成通透纯净的径向渐变淡出效果
+  for (int band = NUM_BANDS - 1; band >= 0; band--) {
+    float t = (float)band / (float)(NUM_BANDS - 1); // 0.0 (最深/最内) ~ 1.0 (最淡/最外)
+    float r = R_MIN + (R_MAX - R_MIN) * t;
+
+    // 非线性衰减插值曲线：末端完全隐入纯白背景，根部呈高饱和鲜艳天蓝
+    float factor = powf(t, 0.70f);
+    uint8_t red   = (uint8_t)(30  + (255 - 30)  * factor);
+    uint8_t green = (uint8_t)(136 + (255 - 136) * factor);
+    uint8_t blue  = 255; // 蓝分量恒定饱满，杜绝灰暗杂色
+
+    uint16_t bandColor = canvas->color565(red, green, blue);
+
+    int prevX = -1, prevY = -1;
+    for (float deg = startDeg; deg <= endDeg + 0.1f; deg += STEP_DEG) {
+      float rad = deg * DEG_TO_RAD_FACTOR;
+      int px = cx + (int)roundf(r * sinf(rad));
+      int py = cy - (int)roundf(r * cosf(rad));
+
+      if (prevX != -1) {
+        canvas->fillTriangle(cx, cy, prevX, prevY, px, py, bandColor);
+      }
+      prevX = px;
+      prevY = py;
+    }
+  }
+}
+
 void RenderEngine::drawCurrentLocation(const Location& location, const std::vector<Location>& routePoints) {
   int x, y;
   
@@ -785,45 +827,14 @@ void RenderEngine::drawCurrentLocation(const Location& location, const std::vect
     
     // 检查位置是否在屏幕范围内
     if (x >= -10 && x < screenWidth + 10 && y >= -10 && y < screenHeight + 10) {
-      // 绘制行进方向扇形视野标志（GPS航向 >= 0 时，类似游戏/地图软件视野）
+      // 1. 绘制行进方向渐变蓝色扇形视野锥（末端渐淡）
       if (location.course >= 0.0f) {
-        const float DEG_TO_RAD_FACTOR = 0.0174532925f;
-        const float fanRadius = 18.0f;     // 扇形半径
-        const float fanHalfAngle = 26.0f;  // 半开角 26 度（总角 52 度视野锥）
-        const float stepDeg = 4.0f;        // 插值步长
-        const uint16_t fanColor = 0xAD7F;  // 柔和淡天蓝视野填充色 (RGB: 170, 175, 255)
-        const uint16_t arcColor = 0x341F;  // 扇形边缘青亮蓝轮廓线 (RGB: 50, 130, 255)
-        
-        float startDeg = location.course - fanHalfAngle;
-        float endDeg = location.course + fanHalfAngle;
-        
-        int prevX = -1, prevY = -1;
-        int firstX = -1, firstY = -1;
-        int lastX = -1, lastY = -1;
-
-        for (float deg = startDeg; deg <= endDeg + 0.1f; deg += stepDeg) {
-          float rad = deg * DEG_TO_RAD_FACTOR;
-          int px = x + (int)roundf(fanRadius * sinf(rad));
-          int py = y - (int)roundf(fanRadius * cosf(rad));
-          
-          if (prevX != -1) {
-            canvas->fillTriangle(x, y, prevX, prevY, px, py, fanColor);
-            canvas->drawLine(prevX, prevY, px, py, arcColor);
-          } else {
-            firstX = px;
-            firstY = py;
-          }
-          prevX = px;
-          prevY = py;
-          lastX = px;
-          lastY = py;
-        }
-        // 绘制视野锥左右两边射线边框
-        if (firstX != -1) canvas->drawLine(x, y, firstX, firstY, arcColor);
-        if (lastX != -1) canvas->drawLine(x, y, lastX, lastY, arcColor);
+        drawCourseHeadingCone(x, y, location.course);
       }
 
-      canvas->fillCircle(x, y, 3, TFT_RED);
+      // 2. 绘制现代地图风格定位标记（白色描边外环 + 鲜艳天蓝圆心）
+      canvas->fillCircle(x, y, 4, TFT_WHITE);
+      canvas->fillCircle(x, y, 3, canvas->color565(30, 136, 229));
       canvas->fillCircle(x, y, 1, TFT_WHITE);
       
       // 如果定位点被锁定，添加十字标志表示锁定
@@ -2139,43 +2150,15 @@ void RenderEngine::draw3DCurrentLocation(const Location& currentLocation) {
   
   // 绘制定位标记、视野标志与航速
   if (screenX > -10 && screenX < screenWidth + 10 && screenY > -10 && screenY < screenHeight + 10) {
-      // 绘制行进方向扇形视野标志（GPS航向 >= 0 时）
+      // 1. 绘制行进方向渐变蓝色扇形视野锥（末端渐淡）
       if (currentLocation.course >= 0.0f) {
-        const float DEG_TO_RAD_FACTOR = 0.0174532925f;
-        const float fanRadius = 18.0f;
-        const float fanHalfAngle = 26.0f;
-        const float stepDeg = 4.0f;
-        const uint16_t fanColor = 0xAD7F;
-        const uint16_t arcColor = 0x341F;
-
-        float startDeg = currentLocation.course - fanHalfAngle;
-        float endDeg = currentLocation.course + fanHalfAngle;
-
-        int prevX = -1, prevY = -1;
-        int firstX = -1, firstY = -1;
-
-        for (float deg = startDeg; deg <= endDeg + 0.1f; deg += stepDeg) {
-          float rad = deg * DEG_TO_RAD_FACTOR;
-          int px = screenX + (int)roundf(fanRadius * sinf(rad));
-          int py = screenY - (int)roundf(fanRadius * cosf(rad));
-
-          if (prevX != -1) {
-            canvas->fillTriangle(screenX, screenY, prevX, prevY, px, py, fanColor);
-            canvas->drawLine(prevX, prevY, px, py, arcColor);
-          } else {
-            firstX = px;
-            firstY = py;
-          }
-          prevX = px;
-          prevY = py;
-        }
-        if (firstX != -1) canvas->drawLine(screenX, screenY, firstX, firstY, arcColor);
-        if (prevX != -1) canvas->drawLine(screenX, screenY, prevX, prevY, arcColor);
+        drawCourseHeadingCone(screenX, screenY, currentLocation.course);
       }
 
-      // 绘制中心定位标记
-      canvas->fillCircle(screenX, screenY, 4, TFT_BLUE);
-      canvas->fillCircle(screenX, screenY, 2, TFT_WHITE);
+      // 2. 绘制现代地图风格定位标记（白色描边外环 + 鲜艳天蓝圆心）
+      canvas->fillCircle(screenX, screenY, 4, TFT_WHITE);
+      canvas->fillCircle(screenX, screenY, 3, canvas->color565(30, 136, 229));
+      canvas->fillCircle(screenX, screenY, 1, TFT_WHITE);
 
       // 当航速大于 0.1km/h 时，显示纯黑简约航速文字
       if (currentLocation.speed > 0.1f) {
