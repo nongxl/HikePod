@@ -689,6 +689,14 @@ void RenderEngine::zoom2D(float factor, float anchorLat, float anchorLng) {
     targetPixelsPerMeter = (pixelsPerMeter > 0.00001f) ? pixelsPerMeter : 0.01f;
   }
 
+  // 如果未锁定定位点（自由浏览模式），以当前屏幕中心对应的真实经纬度为锚点重定标
+  // 彻底消除由于原点在远方导致的杠杆放大效应，保证缩放时屏幕中心永远保持绝对不动！
+  if (!isLocationLocked) {
+    float centerLat, centerLng;
+    screenToLatLng(screenWidth / 2, screenHeight / 2, centerLat, centerLng);
+    centerOnLocation(centerLat, centerLng);
+  }
+
   // 几何级数等比缩放
   targetPixelsPerMeter *= factor;
 
@@ -1439,6 +1447,15 @@ void RenderEngine::zoom3D(float factor) {
   if (targetScaleFactor < 0.05f) targetScaleFactor = 0.05f;
   if (targetScaleFactor > 5000.0f) targetScaleFactor = 5000.0f;
   userScaleFactor = true;
+
+  // 如果未锁定定位点（自由浏览模式），缩放时平移量必须同比例缩放，以保持屏幕中心不动
+  if (!isLocationLocked) {
+    targetPan3DX *= factor;
+    targetPan3DY *= factor;
+    pan3DX *= factor;
+    pan3DY *= factor;
+  }
+
   Serial.printf("[3D Zoom] Target ScaleFactor: %.4f\n", targetScaleFactor);
 }
 
