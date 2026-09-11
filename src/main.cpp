@@ -52,7 +52,7 @@ inline void setUiFont() {
 // GPS 硬件模块类型
 enum GPSModuleType {
   GPS_MOD_CAP_LORA1262 = 0, // Cap LoRa-1262 (RX:15, TX:13)
-  GPS_MOD_UNIT_V11 = 1,     // Unit GPS v1.1 (RX:1, TX:0)
+  GPS_MOD_UNIT_V11 = 1,     // Unit GPS v1.1 (RX:1, TX:2)
   GPS_MOD_CUSTOM = 2        // 自定义引脚
 };
 GPSModuleType currentGpsModule = GPS_MOD_CAP_LORA1262;
@@ -140,6 +140,25 @@ std::vector<int> batteryHistory;
 const int MAX_BATTERY_HISTORY = 360; // 最多存储360个数据点（6小时，每分钟一次）
 unsigned long lastBatteryRecordTime = 0;
 const unsigned long BATTERY_RECORD_INTERVAL = 60000; // 每分钟记录一次电量
+
+// 全局统一电量缓存与获取函数（单例数据源，2秒硬件检测缓存）
+int getSystemBatteryLevel() {
+  static int cachedBattery = -1;
+  static unsigned long lastBatteryCheckTime = 0;
+  unsigned long now = millis();
+  
+  if (cachedBattery < 0 || now - lastBatteryCheckTime > 2000) {
+    cachedBattery = M5Cardputer.Power.getBatteryLevel();
+    cachedBattery = constrain(cachedBattery, 0, 100);
+    lastBatteryCheckTime = now;
+    
+    // 实时同步刷新历史数组最新点
+    if (!batteryHistory.empty()) {
+      batteryHistory.back() = cachedBattery;
+    }
+  }
+  return cachedBattery;
+}
 
 // 屏幕尺寸
 const int SCREEN_WIDTH = 240;
@@ -330,13 +349,15 @@ void readBMI270Data() {
 
 void updateOrientation() {
   if (!imuInitialized) return;
+  // 功耗优化：息屏期间或处于 2D 视图时无需相机倾角，跳过 I2C 读取与姿态解算
+  if (isScreenOff || currentViewMode != MODE_3D) return;
   
   readBMI270Data();
   
   double filteredPitch = lastPitch * (1.0 - IMU_FILTER_ALPHA * 2) + currentPitch * IMU_FILTER_ALPHA * 2;
   double filteredRoll = lastRoll * (1.0 - IMU_FILTER_ALPHA * 2) + currentRoll * IMU_FILTER_ALPHA * 2;
   
-  double maxChange = 0.05;
+  double maxChange = 0.15;
   if (fabs(filteredPitch - lastPitch) > maxChange) {
     filteredPitch = lastPitch + (filteredPitch > lastPitch ? maxChange : -maxChange);
   }
@@ -598,6 +619,7 @@ void loadSelectedKMLFile(const String& fileName) {
   renderEngine.releaseWorldPoints();
   if (currentViewMode == MODE_3D) {
     currentViewMode = MODE_2D;
+    setCpuFrequencyMhz(160);
     renderEngine.setViewMode(MODE_2D);
     renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(), sdInitialized, hasRoute, nullptr, 0, nullptr, 0, showPOIsMode);
     canvas.pushSprite(0, 0);
@@ -634,7 +656,6 @@ void loadSelectedKMLFile(const String& fileName) {
     if (pointCount > 0) {
       hasRoute = true;
       Serial.println("KML file loaded successfully with " + String(pointCount) + " points");
-      saveCommonSettings(); // 保存当前 KML 路线文件名到 NVS
       
       // 检查是否达到点数上限
       if (kmlParser->isMemoryFull()) {
@@ -946,6 +967,13 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Starting HikePod setup...");
 
+  // 功耗优化：默认主频调至 160MHz（相比 240MHz 功耗下降 ~30%，运算依然充沛）
+  setCpuFrequencyMhz(160);
+  Serial.printf("CPU Frequency set to %d MHz\n", getCpuFrequencyMhz());
+
+  // 功耗优化：开机彻底关闭 WiFi 射频调制解调器，防止射频空转耗电（仅在按 'w' 传输文件时按需开启）
+  WiFi.mode(WIFI_OFF);
+
   // 初始化 i18n 国际化模块 (从 NVS 读取语言设置，默认英文)
   I18n::getInstance().begin();
   Serial.printf("Language initialized: %s\n", I18n::getInstance().isChinese() ? "Chinese" : "English");
@@ -965,6 +993,10 @@ void setup() {
       gpsRxPin = prefs.getInt("gps_rx", -1);
       gpsTxPin = prefs.getInt("gps_tx", -1);
       gpsBaud = prefs.getInt("gps_baud", 115200);
+      // 纠正历史版本中 Unit GPS 误将 TX 设为 0 (BOOT 引脚) 的错误
+      if (currentGpsModule == GPS_MOD_UNIT_V11 && gpsTxPin == 0) {
+        gpsTxPin = 2;
+      }
       Serial.printf("[NVS] Loaded GPS module: %d, RX: %d, TX: %d, Baud: %d\n", currentGpsModule, gpsRxPin, gpsTxPin, gpsBaud);
     }
     // 2. 屏幕亮度
@@ -997,10 +1029,14 @@ void setup() {
       showPOIsMode = (sp <= 2) ? sp : 2;
       Serial.printf("[NVS] Loaded showPOIsMode: %d\n", showPOIsMode);
     }
-    // 7. 上次选中的 KML 轨迹文件
+    // 清理历史残留的 last_kml 键，防止开机自动加载
     if (prefs.isKey("last_kml")) {
-      currentKmlFile = prefs.getString("last_kml", "");
-      Serial.printf("[NVS] Loaded last_kml: %s\n", currentKmlFile.c_str());
+      prefs.end();
+      if (prefs.begin("hikepod", false)) {
+        prefs.remove("last_kml");
+        prefs.end();
+      }
+      prefs.begin("hikepod", true);
     }
     prefs.end();
   }
@@ -1009,10 +1045,10 @@ void setup() {
   if (gpsRxPin == -1 || gpsTxPin == -1) {
     if (M5.getBoard() == m5::board_t::board_M5Cardputer) {
       currentGpsModule = GPS_MOD_UNIT_V11;
-      gpsRxPin = 1; // Cardputer v1.1 从 Grove 口插入 GPS v1.1 模块 (RX=1, TX=0)
-      gpsTxPin = 0;
+      gpsRxPin = 1; // Cardputer v1.1 从 Grove 口插入 GPS v1.1 模块 (RX=1, TX=2)
+      gpsTxPin = 2;
       gpsBaud = 115200;
-      Serial.println("Cardputer v1.1 detected: Default Grove Unit GPS v1.1 (RX:1 / TX:0)");
+      Serial.println("Cardputer v1.1 detected: Default Grove Unit GPS v1.1 (RX:1 / TX:2)");
     } else {
       currentGpsModule = GPS_MOD_CAP_LORA1262;
       gpsRxPin = 15; // Cardputer ADV 内部 / Cap LoRa-1262 (RX=15, TX=13)
@@ -1036,7 +1072,7 @@ void setup() {
   canvas.createSprite(SCREEN_WIDTH, SCREEN_HEIGHT);
   
   // 初始化电量历史数据，添加初始数据点
-  int initialBattery = M5Cardputer.Power.getBatteryLevel();
+  int initialBattery = getSystemBatteryLevel();
   batteryHistory.push_back(initialBattery);
   lastBatteryRecordTime = millis();
   Serial.printf("Initial battery level: %d%% (history size: %d)\n", initialBattery, batteryHistory.size());
@@ -1130,18 +1166,6 @@ void setup() {
       }
       prefs.end();
     }
-
-    // 尝试自动恢复上次打开的 KML 路线
-    if (sdInitialized && currentKmlFile.length() > 0) {
-      String filePath = "/HikePod/" + currentKmlFile;
-      if (SD.exists(filePath.c_str())) {
-        Serial.printf("[NVS] Auto-loading last route: %s\n", currentKmlFile.c_str());
-        loadSelectedKMLFile(currentKmlFile);
-      } else {
-        Serial.printf("[NVS] Last KML file not found: %s\n", filePath.c_str());
-        currentKmlFile = "";
-      }
-    }
     
     // 初始化屏幕
   if (currentMode == MODE_GPS_INFO) {
@@ -1162,6 +1186,13 @@ void setup() {
 }
 
 void loop() {
+  bool needRender = false; // 本轮循环是否需要渲染动画/重绘
+
+  // 流式非阻塞消费 GPS 串口 FIFO 数据，保证硬件缓冲区实时清空，彻底消除溢出中断风暴和突发卡顿
+  if (gpsSerial && !gnssModule.isInStandbyMode() && gnssModule.available() > 0) {
+    serialGPSRead();
+  }
+
   // 更新Cardputer状态（键盘、按钮、传感器等）
   M5Cardputer.update();
   
@@ -1285,18 +1316,29 @@ void loop() {
     lastActivityTime = millis();
     // 如果屏幕是关闭的，按任意键恢复亮屏
     if (isScreenOff) {
+      setCpuFrequencyMhz(currentViewMode == MODE_3D ? 240 : 160); // 3D模式满血240MHz，2D模式160MHz省电
+      M5Cardputer.Display.wakeup();         // 唤醒液晶面板控制器 (ST7789 SLPOUT)
       M5Cardputer.Display.setBrightness(screenBrightness);
       isScreenOff = false;
-      Serial.println("Screen turned on");
+      Serial.printf("Screen turned on (wakeup + %dMHz)\n", getCpuFrequencyMhz());
+      // 唤醒后立即重绘刷新一帧，消除黑屏延迟
+      if (currentMode == MODE_HIKEPOD) {
+        renderMap();
+        canvas.pushSprite(0, 0);
+      } else {
+        updateScreen(false);
+      }
     }
   }
   
   // 检查是否需要息屏
   if (SCREEN_TIMEOUT > 0 && !isScreenOff && millis() - lastActivityTime > SCREEN_TIMEOUT) {
-    M5Cardputer.Display.setBrightness(0); // 关闭屏幕
+    M5Cardputer.Display.setBrightness(0); // 关闭屏幕背光
+    M5Cardputer.Display.sleep();          // 功耗优化：硬件液晶面板休眠 (ST7789 SLPIN)
+    setCpuFrequencyMhz(80);               // 功耗优化：息屏降频至 80MHz 极大降低底噪功耗
     isScreenOff = true;
     screenOffTime = millis(); // 记录屏幕关闭时间
-    Serial.println("Screen turned off due to inactivity");
+    Serial.println("Screen turned off (sleep + 80MHz)");
   }
   
   // 息屏10秒后让GNSS模块进入待机模式
@@ -1317,7 +1359,7 @@ void loop() {
   // 定期记录电量数据，用于绘制电量消耗曲线
   unsigned long currentTime = millis();
   if (currentTime - lastBatteryRecordTime > BATTERY_RECORD_INTERVAL) {
-    int currentBattery = M5Cardputer.Power.getBatteryLevel();
+    int currentBattery = getSystemBatteryLevel();
     batteryHistory.push_back(currentBattery);
     
     // 限制历史数据点数量
@@ -1335,7 +1377,7 @@ void loop() {
     interactionManager.update(keyboardChanged, keyboardPressed, keys);
     
     // 检查是否需要重绘
-    bool needRender = false;
+    needRender = false;
     
     static Location prevLocation; // 用于跟踪GPS位置变化
     static bool prevLocationInitialized = false;  // 跟踪prevLocation是否已初始化
@@ -1357,13 +1399,13 @@ void loop() {
       // 待机模式下保持1秒更新，保证记录精度
       gpsInterval = 1000;
     } else {
-      // 正常工作模式：检查GNSS定位状态
+      // 正常工作模式：检查GNSS定位状态与屏幕状态
       if (isGNSSSearching) {
-        // 搜星阶段（未定位）：500ms检查一次
-        gpsInterval = 500;
+        // 搜星阶段（未定位）：使用高频快速搜星
+        gpsInterval = GPS_UPDATE_INTERVAL_SEARCH;
       } else {
-        // 已定位阶段：1000ms（1秒）更新一次
-        gpsInterval = 1000;
+        // 已定位阶段：息屏与亮屏动态区分更新频率
+        gpsInterval = isScreenOff ? GPS_UPDATE_INTERVAL_SCREEN_OFF : GPS_UPDATE_INTERVAL_NORMAL;
       }
     }
     
@@ -1377,9 +1419,8 @@ void loop() {
         needRender = true;
       }
       
-      // 读取GNSS数据（serialGPSRead内部会通过feed()同时更新TinyGPSPlus和NMEA卫星解析器）
+      // 获取GNSS流式解析的最新位置数据
       if (!inStandbyMode) {
-        serialGPSRead();
         currentLocation = gnssModule.getCurrentLocation();
         
         // 如果获取到GPS时间，设置系统时间
@@ -1685,10 +1726,10 @@ void loop() {
       }
     }
     
-    // 控制刷新率
+    // 控制刷新率（3D模式保底30FPS/33ms消除顿挫，2D模式10FPS/100ms省电，息屏状态彻底熔断）
     static unsigned long lastRenderTime = 0;
-    const unsigned long RENDER_INTERVAL = 100; // 提高刷新率到10FPS以改善用户体验
-    if (needRender || currentTime - lastRenderTime > RENDER_INTERVAL) {
+    const unsigned long RENDER_INTERVAL = (currentViewMode == MODE_3D) ? 33 : 100;
+    if (!isScreenOff && (needRender || currentTime - lastRenderTime > RENDER_INTERVAL)) {
       if (!openMenu && !gpsNoFixAlertVisible && !kmlFullAlertVisible && !notTrackingAlertVisible && !helpMenuVisible) { // 只有在没有菜单打开且没有提示信息框时才渲染
         // 渲染界面，传递内存池信息以绘制完整路径和已记录的轨迹
         renderMap();
@@ -1729,9 +1770,6 @@ void loop() {
       }
       
       if (currentTime - lastGPSUpdateTime > gpsInterval) {
-        // 读取GPS数据（serialGPSRead内部会通过feed()同时更新TinyGPSPlus和NMEA解析器）
-        serialGPSRead();
-        
         // 更新currentLocation（从gnssModule获取最新位置）
         currentLocation = gnssModule.getCurrentLocation();
         lastGPSUpdateTime = currentTime;
@@ -1765,6 +1803,18 @@ void loop() {
       updateScreen(true);
     }
     modeChanged = false;
+  }
+  
+  // 功耗优化：自适应低功耗休眠，让出 CPU 进 FreeRTOS Tickless Idle
+  if (isScreenOff) {
+    // 息屏待机状态：休眠 60ms，CPU 占用率骤降，按键扫描与后台 GPS 依然精准灵敏
+    delay(60);
+  } else if (keyboardChanged || keyboardPressed || (currentMode == MODE_HIKEPOD && needRender)) {
+    // 交互操作或平滑动画进行中：微量延时 2ms（3D模式满帧流畅）或 6ms（2D模式），保持极致丝滑手感
+    delay(currentViewMode == MODE_3D ? 2 : 6);
+  } else {
+    // 亮屏无操作静止状态：3D模式延时 4ms 保持敏捷体感响应，2D模式延时 20ms 节能
+    delay(currentViewMode == MODE_3D ? 4 : 20);
   }
   
   // 确保键盘响应，即使在复杂操作之间也让出控制权
@@ -2241,6 +2291,10 @@ void drawSettingsMenu(bool should_I) {
 
     // 绘制电量消耗曲线
     if (batteryHistory.size() >= 1) {
+      // 绘制前先获取最新统一实时电量，并同步至折线图终点
+      int currentRealBattery = getSystemBatteryLevel();
+      batteryHistory.back() = currentRealBattery;
+
       setUiFont();
       canvas.setTextColor(TFT_BLUE, TFT_WHITE);
       canvas.setCursor(16, 85);
@@ -2314,7 +2368,7 @@ void drawSettingsMenu(bool should_I) {
       
       // 在曲线最右侧显示当前值
       if (batteryHistory.size() >= 1) {
-        int currentBattery = batteryHistory[batteryHistory.size() - 1];
+        int currentBattery = currentRealBattery;
         int currentX = CHART_X + 5 + (int)((double)(batteryHistory.size() - 1) / (MAX_BATTERY_HISTORY - 1) * (CHART_WIDTH - 10));
         int currentY = CHART_Y + CHART_HEIGHT - 5 - (int)((currentBattery - minBattery) / (double)batteryRange * (CHART_HEIGHT - 10));
         canvas.setFont(&fonts::Font0);
@@ -2407,7 +2461,7 @@ void drawGPSModuleSelectionMenu(bool should_I) {
     };
     ModOption options[3] = {
       {"[1] LoRa-1262", "RX:15 TX:13"},
-      {"[2] GPS v1.1", "RX:1  TX:0"},
+      {"[2] GPS v1.1", "RX:1  TX:2"},
       {"[3] Custom...", "Manual Pins"}
     };
 
@@ -2489,12 +2543,9 @@ void saveCommonSettings() {
     prefs.putULong("gps_int_norm", GPS_UPDATE_INTERVAL_NORMAL);
     prefs.putULong("gps_int_off", GPS_UPDATE_INTERVAL_SCREEN_OFF);
     prefs.putUChar("show_pois", (uint8_t)showPOIsMode);
-    if (currentKmlFile.length() > 0) {
-      prefs.putString("last_kml", currentKmlFile);
-    }
     prefs.end();
-    Serial.printf("[NVS] Settings saved: brightness=%d, timeout=%lu, gps_norm=%lu, gps_off=%lu, show_pois=%d, kml=%s\n",
-                  screenBrightness, SCREEN_TIMEOUT, GPS_UPDATE_INTERVAL_NORMAL, GPS_UPDATE_INTERVAL_SCREEN_OFF, showPOIsMode, currentKmlFile.c_str());
+    Serial.printf("[NVS] Settings saved: brightness=%d, timeout=%lu, gps_norm=%lu, gps_off=%lu, show_pois=%d\n",
+                  screenBrightness, SCREEN_TIMEOUT, GPS_UPDATE_INTERVAL_NORMAL, GPS_UPDATE_INTERVAL_SCREEN_OFF, showPOIsMode);
   }
 }
 
@@ -2532,32 +2583,42 @@ void initGPSSerial(bool should_I) {
 /*    Read the GPS seria and compose the NMEA sentence.
 */
 void serialGPSRead() {
-  static String nmeaLine = "";
+  static char nmeaBuf[128];
+  static size_t nmeaIdx = 0;
   bool gotValidChar = false;
   GPSState prevState = gpsSerialState;
   
+  // 流式非阻塞消费串口 FIFO，每次仅读取当前到达的几个字节，耗时极低 (<10μs)
   while (gnssModule.available()) {
     char c = gnssModule.read();
     if (c != '\r' && c != '\n') gotValidChar = true;
     
-    // 同时将字符传递给TinyGPSPlus解析器，避免数据竞争
+    // 同时喂入 TinyGPSPlus 状态机
     gnssModule.feed(c);
     
     if (c == '\n') {
-      nmeaDispatcher(nmeaLine);
-      nmeaLine = "";
-    } else if (c != '\r')
-      nmeaLine += c;
+      nmeaBuf[nmeaIdx] = '\0';
+      if (nmeaIdx > 0) {
+        // 仅在 GPS Info 模式或调试抽屉可见时解析卫星星历，常规徒步模式彻底避免 String 堆分配
+        if (currentMode == MODE_GPS_INFO || (currentMode == MODE_HIKEPOD && (renderEngine.getDebugVisible() || renderEngine.getDebugPosition() > -100))) {
+          nmeaDispatcher(String(nmeaBuf));
+        }
+      }
+      nmeaIdx = 0;
+    } else if (c != '\r') {
+      if (nmeaIdx < sizeof(nmeaBuf) - 1) {
+        nmeaBuf[nmeaIdx++] = c;
+      } else {
+        nmeaIdx = 0; // 超长异常句子重置
+      }
+    }
   }
   
   if (gotValidChar) {
     lastValidGpsMillis = millis();
     gpsSerialState = GPS_ON;
   } else if (gpsSerial && millis() - lastValidGpsMillis > GPS_TIMEOUT) {
-    // 只有当gpsSerial为true（即用户希望GPS是开启的）且超时未收到数据时，才设置为错误状态
-    // 但不再自动关闭GPS，保持GPS开启状态
     gpsSerialState = GPS_ERR;
-    // 移除自动关闭GPS的代码，让GPS保持开启
   }
   
   if (gpsSerialState != prevState)
@@ -2569,6 +2630,13 @@ void serialGPSRead() {
 void nmeaDispatcher(const String &nmeaLine) {
   if (nmeaSerial)
     Serial.println(nmeaLine);
+
+  // 性能优化：当处于徒步导航主模式且调试抽屉未开启时，无需解析消耗巨大的 GSV/GSA 卫星星历数据
+  // 经纬度、速度、航向、海拔等导航核心数据已由 TinyGPSPlus 极速轻量处理
+  if (currentMode == MODE_HIKEPOD && !renderEngine.getDebugVisible() && renderEngine.getDebugPosition() <= -100) {
+    return;
+  }
+
   // Trim line endings.
   String line = nmeaLine;
   line.trim();
@@ -3348,7 +3416,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             drawSettingsMenu(true);
             return;
           } else if (gpsModuleMenuSelection == 1) {
-            saveGPSModuleConfig(GPS_MOD_UNIT_V11, 1, 0, 115200);
+            saveGPSModuleConfig(GPS_MOD_UNIT_V11, 1, 2, 115200);
             showStatusToast(I18n::t(T_TOAST_GPS_MOD_SAVED));
             drawGPSModuleSelectionMenu(false);
             drawSettingsMenu(true);
@@ -3578,9 +3646,10 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
           if (currentTime - lastVPress > V_DEBOUNCE_DELAY) {
             currentViewMode = (currentViewMode == MODE_2D) ? MODE_3D : MODE_2D;
             renderEngine.setViewMode(currentViewMode);
+            setCpuFrequencyMhz(currentViewMode == MODE_3D ? 240 : 160); // 3D模式240MHz满血性能，2D模式160MHz省电
             viewModeChanged = true;
             lastVPress = currentTime;
-            Serial.printf("Switched to %s view mode\n", currentViewMode == MODE_2D ? "2D" : "3D");
+            Serial.printf("Switched to %s view mode (%d MHz)\n", currentViewMode == MODE_2D ? "2D" : "3D", getCpuFrequencyMhz());
             // 重新渲染界面
             renderMap();
             // 确保亮度设置生效
@@ -3819,7 +3888,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                   if (currentGpsModule == GPS_MOD_CAP_LORA1262) {
                     saveGPSModuleConfig(GPS_MOD_CAP_LORA1262, 15, 13, 115200);
                   } else if (currentGpsModule == GPS_MOD_UNIT_V11) {
-                    saveGPSModuleConfig(GPS_MOD_UNIT_V11, 1, 0, 115200);
+                    saveGPSModuleConfig(GPS_MOD_UNIT_V11, 1, 2, 115200);
                   } else {
                     saveGPSModuleConfig(GPS_MOD_CUSTOM, gpsRxPin, gpsTxPin, gpsBaud);
                   }
@@ -3865,7 +3934,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                   if (currentGpsModule == GPS_MOD_CAP_LORA1262) {
                     saveGPSModuleConfig(GPS_MOD_CAP_LORA1262, 15, 13, 115200);
                   } else if (currentGpsModule == GPS_MOD_UNIT_V11) {
-                    saveGPSModuleConfig(GPS_MOD_UNIT_V11, 1, 0, 115200);
+                    saveGPSModuleConfig(GPS_MOD_UNIT_V11, 1, 2, 115200);
                   } else {
                     saveGPSModuleConfig(GPS_MOD_CUSTOM, gpsRxPin, gpsTxPin, gpsBaud);
                   }

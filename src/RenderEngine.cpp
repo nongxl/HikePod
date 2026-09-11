@@ -70,8 +70,17 @@ RenderEngine::RenderEngine() :
   hasReferenceOrientation(false),
   refPitch(0.0),
   refRoll(0.0),
+  projAlpha(19.47f * (float)M_PI / 180.0f),
+  projGamma(20.7f * (float)M_PI / 180.0f),
+  sinA(sinf(19.47f * (float)M_PI / 180.0f)),
+  cosA(cosf(19.47f * (float)M_PI / 180.0f)),
+  sinG(sinf(20.7f * (float)M_PI / 180.0f)),
+  cosG(cosf(20.7f * (float)M_PI / 180.0f)),
+  targetAlpha(19.47f * (float)M_PI / 180.0f),
+  targetGamma(20.7f * (float)M_PI / 180.0f),
   targetPitch(0.0),
   targetRoll(0.0),
+  orientationActive(false),
   viewOffsetX(0.0),
   viewOffsetY(0.0),
   targetViewOffsetX(0.0),
@@ -1289,26 +1298,11 @@ void RenderEngine::drawBatteryInfo() {
   canvas->setTextColor(TFT_BLACK);
   canvas->setTextSize(1);
   
-  // 每2秒检查一次电量，避免频繁刷新
-  const unsigned long BATTERY_CHECK_INTERVAL = 2000;
-  const int BATTERY_CHANGE_THRESHOLD = 2; // 只有变化超过2%才更新显示
-  
-  unsigned long currentTime = millis();
-  if (currentTime - lastBatteryCheckTime > BATTERY_CHECK_INTERVAL) {
-    int currentBattery = M5Cardputer.Power.getBatteryLevel();
-    
-    // 只有当电量变化超过阈值时才更新显示
-    if (abs(currentBattery - lastBatteryPercentage) >= BATTERY_CHANGE_THRESHOLD || lastBatteryPercentage == -1) {
-      lastBatteryPercentage = currentBattery;
-    }
-    
-    lastBatteryCheckTime = currentTime;
-  }
-  
-  // 在右上角绘制电量百分比
-  if (lastBatteryPercentage >= 0) {
+  // 从全局统一数据源获取电量
+  int battery = getSystemBatteryLevel();
+  if (battery >= 0) {
     canvas->setCursor(screenWidth - 25, 10);
-    canvas->printf("%d%%", lastBatteryPercentage);
+    canvas->printf("%d%%", battery);
   }
 }
 
@@ -1398,40 +1392,100 @@ void RenderEngine::setReferenceOrientation(float pitchAngle, float rollAngle) {
 }
 
 void RenderEngine::updateCameraOrientation(float currentPitch, float currentRoll, float accelX, float accelY) {
+  // 自然手持倾斜角基准（Cardputer 用户自然双手握持时的最佳观察仰角约 35° / 0.61 rad）
+  const float NOMINAL_HOLD_PITCH = 35.0f * (float)M_PI / 180.0f;
+  
+  // 计算平放->手持倾斜的过渡比例因子 (0.0 = 完全平放, 1.0 = 手持或立起)
+  // 当设备水平平放在桌面上时 (currentPitch <= 0.03 rad，约 1.7° 平放稳态死区)，判定为完全平放
+  float tiltFactor = 0.0f;
+  if (currentPitch > 0.03f) {
+    tiltFactor = constrain(currentPitch / NOMINAL_HOLD_PITCH, 0.0f, 1.0f);
+    // Smoothstep 平滑曲线过渡：使得平放起步和手持收敛时极其柔和顺滑
+    tiltFactor = tiltFactor * tiltFactor * (3.0f - 2.0f * tiltFactor);
+  }
+  
+  // 目标投影仰角与偏角计算：
+  // 1. 完全平放状态 (tiltFactor = 0):
+  //    alpha = 90° (正俯视Top-Down), gamma = 0° (正交不偏航)
+  //    此时 sinA = 1, cosA = 0, sinG = 0, cosG = 1 -> 地面网格完全水平正交方正，高程侧向偏移归零，地形图完全平放！
+  // 2. 自然手持状态 (tiltFactor = 1):
+  //    alpha = 19.47° (经典二轴测), gamma = 20.7° (经典二轴测偏角)
+  //    此时立体高程与纵深充分展开，呈现最佳 3D 地形图观察视角！
+  const float FLAT_ALPHA = 90.0f * (float)M_PI / 180.0f;
+  const float DEFAULT_ALPHA = 19.47f * (float)M_PI / 180.0f;
+  const float FLAT_GAMMA = 0.0f;
+  const float DEFAULT_GAMMA = 20.7f * (float)M_PI / 180.0f;
+  
+  targetAlpha = FLAT_ALPHA * (1.0f - tiltFactor) + DEFAULT_ALPHA * tiltFactor;
+  targetGamma = FLAT_GAMMA * (1.0f - tiltFactor) + DEFAULT_GAMMA * tiltFactor;
+  
+  // 手持状态下的动态姿态交互（相对于手持基准角的微调与侧倾）
+  float deltaPitch = 0.0f;
+  if (currentPitch > NOMINAL_HOLD_PITCH) {
+    deltaPitch = (currentPitch - NOMINAL_HOLD_PITCH);
+  }
+  // 平放时 Roll 自动归零，手持时具备横滚视角交互
+  float deltaRoll = -currentRoll * tiltFactor;
+  
+  const float MAX_ANGLE = 45.0f * (float)M_PI / 180.0f;
+  deltaPitch = constrain(deltaPitch, -MAX_ANGLE, MAX_ANGLE);
+  deltaRoll = constrain(deltaRoll, -MAX_ANGLE, MAX_ANGLE);
+  
+  // 连续更新目标姿态（由平滑滤波器自然消除手部高频微震，不再使用导致阶跃卡顿的硬截断死区）
+  targetPitch = deltaPitch;
+  targetRoll = deltaRoll;
+
+  // 首帧瞬时捕获就位（从2D切换到3D时，若处于平放或手持状态，直接就位避免动画延迟）
   if (!hasReferenceOrientation) {
-    setReferenceOrientation(currentPitch, currentRoll);
+    projAlpha = targetAlpha;
+    projGamma = targetGamma;
+    sinA = sinf(projAlpha);
+    cosA = cosf(projAlpha);
+    sinG = sinf(projGamma);
+    cosG = cosf(projGamma);
+    pitch = targetPitch;
+    roll = targetRoll;
+    hasReferenceOrientation = true;
     return;
   }
   
-  float deltaPitch = currentPitch - refPitch;
-  float deltaRoll = currentRoll - refRoll;
-  
-  const float MAX_ANGLE = 90.0f * (float)M_PI / 180.0f;
-  deltaPitch = constrain(deltaPitch, -MAX_ANGLE, MAX_ANGLE);
-  deltaRoll = constrain(deltaRoll, -MAX_ANGLE, MAX_ANGLE);
-  deltaRoll = -deltaRoll;
-  
-  // 死区滤波与平滑：微弱的手部生理震颤（小于1.1度）不驱动角度晃动，抑制高频抖动
-  const float DEADBAND = 0.02f; // ~1.15度
-  if (fabs(deltaPitch - targetPitch) > DEADBAND) {
-    targetPitch = deltaPitch;
-  }
-  if (fabs(deltaRoll - targetRoll) > DEADBAND) {
-    targetRoll = deltaRoll;
-  }
-  
-  const float SMOOTH_FACTOR = 0.12f;
+  // 姿态平滑插值逼近
+  const float SMOOTH_FACTOR = 0.15f;
   pitch += (targetPitch - pitch) * SMOOTH_FACTOR;
   roll += (targetRoll - roll) * SMOOTH_FACTOR;
+  projAlpha += (targetAlpha - projAlpha) * SMOOTH_FACTOR;
+  projGamma += (targetGamma - projGamma) * SMOOTH_FACTOR;
   
-  // 大幅降低微小加速度对视口的晃动拉扯（VIEW_SHIFT_SCALE 由 15.0f 降为 2.0f）
+  sinA = sinf(projAlpha);
+  cosA = cosf(projAlpha);
+  sinG = sinf(projGamma);
+  cosG = cosf(projGamma);
+  
+  // 加速度微调视口偏移（仅在手持倾斜时生效，平放时归零）
   const float VIEW_SHIFT_SCALE = 2.0f;
-  targetViewOffsetX = -accelY * VIEW_SHIFT_SCALE;
-  targetViewOffsetY = accelX * VIEW_SHIFT_SCALE;
+  targetViewOffsetX = -accelY * VIEW_SHIFT_SCALE * tiltFactor;
+  targetViewOffsetY = accelX * VIEW_SHIFT_SCALE * tiltFactor;
   
-  const float OFFSET_SMOOTH_FACTOR = 0.05f;
+  const float OFFSET_SMOOTH_FACTOR = 0.08f;
   viewOffsetX += (targetViewOffsetX - viewOffsetX) * OFFSET_SMOOTH_FACTOR;
   viewOffsetY += (targetViewOffsetY - viewOffsetY) * OFFSET_SMOOTH_FACTOR;
+  
+  // 动作持续惯性窗口（Hangover Timer）：转动设备时保持持续活跃渲染，彻底消除中途降频卡顿
+  static unsigned long lastMovementTime = 0;
+  static float lastSamplePitch = 0.0f;
+  static float lastSampleRoll = 0.0f;
+  
+  if (fabs(currentPitch - lastSamplePitch) > 0.003f || fabs(currentRoll - lastSampleRoll) > 0.003f) {
+    lastMovementTime = millis();
+    lastSamplePitch = currentPitch;
+    lastSampleRoll = currentRoll;
+  }
+  
+  bool inMotion = (millis() - lastMovementTime < 350);
+  bool interpolating = (fabs(pitch - targetPitch) > 0.0005f) || (fabs(roll - targetRoll) > 0.0005f) ||
+                       (fabs(projAlpha - targetAlpha) > 0.0005f) || (fabs(projGamma - targetGamma) > 0.0005f);
+  
+  orientationActive = inMotion || interpolating;
 }
 
 void RenderEngine::increaseVerticalExaggeration() {
@@ -1486,12 +1540,6 @@ void RenderEngine::center3DOnLocation(const Location& loc) {
   float cosR = cosf((float)roll);
   float sinR = sinf((float)roll);
 
-  float alpha = 19.47f * PI / 180.0f;
-  float gamma = 20.7f * PI / 180.0f;
-  float sinA = sinf(alpha);
-  float cosA = cosf(alpha);
-  float sinG = sinf(gamma);
-  float cosG = cosf(gamma);
 
   const float EARTH_RADIUS_KM = 6378.137f;
   const float DEG2RAD = PI / 180.0f;
@@ -1533,11 +1581,16 @@ void RenderEngine::reset3DView() {
   pan3DY = targetPan3DY = 0.0f;
   scaleFactor = targetScaleFactor = 1.0f;
   userScaleFactor = false;
+  hasReferenceOrientation = false;
   Serial.println("[3D] View reset");
 }
 
 bool RenderEngine::update3DCameraTransition() {
   bool changing = false;
+  
+  if (orientationActive) {
+    changing = true;
+  }
   
   // 缩放平滑阻尼插值 (Lerp)
   float scaleDiff = targetScaleFactor - scaleFactor;
@@ -1763,12 +1816,6 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
   float cosR = cosf((float)roll);
   float sinR = sinf((float)roll);
   
-  float alpha = 19.47f * PI / 180.0f;
-  float gamma = 20.7f * PI / 180.0f;
-  float sinA = sinf(alpha);
-  float cosA = cosf(alpha);
-  float sinG = sinf(gamma);
-  float cosG = cosf(gamma);
   
   float centerX = 0.0f, centerY = 0.0f;
   if (useCenterRotation) {
@@ -2219,12 +2266,6 @@ void RenderEngine::draw3DCurrentLocation(const Location& currentLocation) {
   float cosR = cosf((float)roll);
   float sinR = sinf((float)roll);
   
-  float alpha = 19.47f * PI / 180.0f;
-  float gamma = 20.7f * PI / 180.0f;
-  float sinA = sinf(alpha);
-  float cosA = cosf(alpha);
-  float sinG = sinf(gamma);
-  float cosG = cosf(gamma);
   
   const float EARTH_RADIUS_KM = 6378.137f;
   const float DEG2RAD = PI / 180.0f;

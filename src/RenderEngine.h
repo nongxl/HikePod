@@ -30,6 +30,9 @@ enum ViewMode {
   MODE_3D          // 3D地形模式
 };
 
+// 全局统一电量获取接口（单例数据源，带2秒硬件读取缓存）
+int getSystemBatteryLevel();
+
 class RenderEngine {
 public:
   RenderEngine();
@@ -250,9 +253,20 @@ private:
   float refPitch;           // 参考俯仰角
   float refRoll;            // 参考横滚角
   
+  // 3D 投影角度参数（支持平放与倾斜手持动态过渡）
+  float projAlpha;          // 当前投影仰角
+  float projGamma;          // 当前投影偏角
+  float sinA;               // 投影仰角正弦缓存
+  float cosA;               // 投影仰角余弦缓存
+  float sinG;               // 投影偏角正弦缓存
+  float cosG;               // 投影偏角余弦缓存
+  float targetAlpha;        // 目标投影仰角
+  float targetGamma;        // 目标投影偏角
+
   // 平滑过渡的目标姿态
   float targetPitch;        // 目标俯仰角
   float targetRoll;         // 目标横滚角
+  bool orientationActive;   // 3D姿态是否正在平滑过渡变化
   
   // 视角平移（基于加速度估算）
   float viewOffsetX;        // 视角X偏移

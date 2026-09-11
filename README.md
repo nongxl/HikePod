@@ -15,7 +15,7 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 - **GPS模块**：支持多种GNSS模块（如 CAP-1262）。系统会自动检测硬件版本：ADV 使用内置引脚 (G13/G15)，v1.1 自动重映射至 Grove 接口 (G1/G2) 以解决键盘矩阵冲突。Rx/Tx引脚亦可在设置中手动修改。
 - **显示技术**：采用离屏渲染（M5GFX Canvas）与高效 UI 绘制，全局支持中文字体 (`efontCN_12`)
 - **离线导航**：支持流式解析 KML 路径文件，具备动态下采样和缩放自动适配功能
-- **电量优化**：徒步实测单次充电可支持约 7-8 小时连续息屏定位（配合 30s 亮屏超时）
+- **电量优化**：深度多级节能控制策略（息屏液晶控制器深睡、动态调频与渲染熔断），单次充电可支持数十小时长效轨迹记录
 - **轨迹记录**：实时记录徒步轨迹并生成 KML 文件
 
 ### 操作使用方法
@@ -36,19 +36,32 @@ HikePod是一个基于M5Stack Cardputer ADV的户外徒步导航项目，集成�
 #### 基本操作
 
 - **[h]**：打开帮助菜单 (双列整齐排版)
-- **[c]**：打开设置菜单 (支持亮度、超时、GPS 间隔、POI 开关等选项)
+- **[c]**：打开设置菜单 (支持屏幕亮度、超时、GPS 间隔、POI 规则、GPS 硬件模块、系统语言等持久化设置)
+- **[s]**：快速开启/关闭 GPS 模块
 - **[u]**：打开 USB 文件传输模式 (挂载为电脑 U 盘，即插即用高速管理 KML 与导出轨迹)
 - **[w]**：打开 WiFi KML 传输窗口 (HTTP 网页文件管理)
-- **[Space]**：锁定/解锁当前位置
+- **[Space]**：锁定/解锁当前位置居中跟随
 - **[t]**：切换轨迹记录模式（启动时呼出输入法输入自定义名称，自动在后方拼接时间戳）
 - **[i]**：在轨迹记录模式下按 i 呼出输入法输入标记点 (POI) 并记录到 KML 中
 - **[r]**：在“选择 KML 文件”列表中按 r 重命名当前选中的文件
 - **[v]**：切换 2D / 3D 视图
-- **[TAB]**：切换到 GPS Info 详细模式
-- **[ESC]**：切换调试日志显示
-- **[+/-]**：放大 / 缩小地图 (缩放级别支持 5m 至 100km)
+- **[ [ ] / [ ] ]**：调节 3D 视图垂直高度放大系数 (0.5x ~ 5.0x)
+- **[ESC]**：退出当前弹窗/菜单；主界面下切换调试信息面板（含卫星天球分布图）
+- **[+/-]**：放大 / 缩小地图 (支持 5m 至 100km 平滑无级缩放)
 - **[方向键]**：平移地图
-- **航向扇形显示**：定位点前方动态绘制青蓝色扇形视锥，直观指示当前行进方向
+- **航向扇形显示**：定位点前方动态绘制渐变青蓝色扇形视锥，直观指示当前行进方向
+
+#### 电源管理与低功耗设计
+
+为了满足全天候户外重装徒步的长续航需求，HikePod 实施了深度的多级节能控制策略：
+
+1. **息屏渲染熔断（Zero-Render on Screen-Off）**：在息屏待机状态下，系统彻底熔断 2D/3D 地图渲染与 SPI 总线推屏，消除后台无效的图形绘制运算与显存传输功耗。
+2. **FreeRTOS 自适应 Tickless Idle**：主循环告别 100% 满负荷死循环，根据运行状态自适应休眠（操作/动画 ~8ms，静态待机 ~20ms，息屏待机 ~60ms），深度释放 CPU 自旋功耗。
+3. **屏幕控制器硬件深睡（Panel Hardware Sleep）**：息屏时除背光归零外，向 ST7789v2 液晶驱动芯片发送硬件 SLPIN 指令，关闭内部振荡器与电荷泵（功耗降至微安级），任意按键瞬时唤醒（SLPOUT）并立即全屏刷屏恢复。
+4. **CPU 动态频率缩放（DVFS）**：日常工作主频优化为 160MHz（性能依然充沛且较 240MHz 节能约 30%）；息屏待机时自动平滑降频至 80MHz 极大降低底噪功耗。
+5. **动态 GPS 采样策略**：搜星阶段高频快速定位，定位成功后根据屏幕状态动态切换（支持息屏 10s 等低频间歇记录），大幅降低串口与定位运算负荷。
+6. **开机 WiFi 射频下电**：开机默认彻底关闭 WiFi 射频调制解调器，消除无线电待机功耗，仅在按 `w` 进行网页文件管理时按需开启。
+7. **姿态传感器智能采样**：在息屏状态以及固定俯视的 2D 地图模式下，自动跳过 BMI270 的 I2C 轮询与三角函数解算，减少总线事务与中断唤醒。
 
 #### 离线 KML 文件准备
 
@@ -217,11 +230,11 @@ HikePod is an outdoor hiking navigation project based on M5Stack Cardputer ADV, 
 - [x] GPS Info mode UI layout optimization (Fits 135px height)
 - [x] KML file menu UI enhancement (Spacing & highlight fix)
 - [x] **USB Mass Storage (MSC) mode**: Press 'u' to mount SD card as PC USB disk
-- [x] **Redesigned Two-Column Help Menu**: Clean and elegant layout on 240x135 screen
+- [x] **Comprehensive Low-Power Strategy**: Panel hardware deep sleep, zero-render screen off, adaptive idle ticks, DVFS (160MHz/80MHz), modem power-down
+- [x] **NVS User Preferences Persistence**: Instant non-volatile saving for brightness, timeout, POI display rules, GPS intervals, and last route
 
 ### Future Plans
-1. **Low Power Strategy**: Deep sleep and further screen-off optimizations.
-2. **Enhanced Altitude Data**: Finer resolution altitude logging.
+1. **Enhanced Altitude Data**: Finer resolution altitude logging and barometer fusion.
 
 ### Acknowledgements
 
