@@ -34,6 +34,8 @@ SPIClass sdSPI;
 #include "RenderEngine.h"
 #include "InteractionManager.h"
 #include "TrackingManager.h"
+#include "SatData.h"
+#include "GPSModuleImages.h"
 
 // 离屏渲染精灵对象
 M5Canvas canvas(&M5Cardputer.Display);
@@ -47,6 +49,17 @@ inline void setUiFont() {
   }
 }
 
+// GPS 硬件模块类型
+enum GPSModuleType {
+  GPS_MOD_CAP_LORA1262 = 0, // Cap LoRa-1262 (RX:15, TX:13)
+  GPS_MOD_UNIT_V11 = 1,     // Unit GPS v1.1 (RX:1, TX:0)
+  GPS_MOD_CUSTOM = 2        // 自定义引脚
+};
+GPSModuleType currentGpsModule = GPS_MOD_CAP_LORA1262;
+bool gpsModuleMenuOpen = false;
+int gpsModuleMenuSelection = 0;
+void drawGPSModuleSelectionMenu(bool should_I);
+
 // 全局对象
 GNSSModule gnssModule;
 KMLParser* kmlParser = nullptr;
@@ -54,17 +67,6 @@ RenderEngine renderEngine;
 InteractionManager interactionManager;
 TrackingManager trackingManager;
 WiFiManager wifiManager;
-
-// 卫星数据结构体
-struct SatData {
-  String system;   // "GPS", "GLONASS", "Galileo", "BeiDou".
-  int id;
-  int elevation;   // 0-90°.
-  int azimuth;     // 0-359°.
-  int snr;         // 0-99.
-  bool used;       // used in the fix.
-  bool visible;    // visible in the last cycle.
-};
 
 // 卫星数据存储
 std::vector<SatData> satellites;
@@ -180,9 +182,10 @@ bool helpMenuVisible = false; // 帮助菜单是否可见
 int settingsMenuSelection = 0; // 当前选中的设置选项
 int settingsMenuScrollOffset = 0; // 设置菜单滚动视口起始项索引
 const int SETTINGS_VISIBLE_ITEMS = 4; // 设置菜单可视项数量
-const int SETTINGS_MENU_OPTIONS = 7; // 设置选项数量（文件 + 亮度 + 超时 + 2个频率 + POI开关 + 语言）
+const int SETTINGS_MENU_OPTIONS = 8; // 设置选项数量（文件 + 亮度 + 超时 + 2个频率 + POI开关 + GPS模块 + 语言）
 String currentKmlFile = ""; // 当前加载的 KML 文件名
 int showPOIsMode = 2;      // 关键点显示模式 (0:OFF, 1:ON, 2:AUTO)
+void saveGPSModuleConfig(GPSModuleType mod, int rx, int tx, int baud = 115200);
 
 // 动态合并 KML 文件中的预置 POI 与 Tracking 过程中实时记录的 Waypoint POI
 static std::vector<POI> activePOIList;
@@ -224,6 +227,7 @@ const POI* getActivePOIPool(int& outCount) {
 void renderMap() {
   int poiCount = 0;
   const POI* poiPool = getActivePOIPool(poiCount);
+  renderEngine.setSatellites(&satellites);
   renderEngine.render(routePoints, currentLocation, trackingManager.getTrackPoints(),
                       sdInitialized, hasRoute, pointPool, totalPoints,
                       poiPool, poiCount, showPOIsMode);
@@ -948,15 +952,35 @@ void setup() {
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);  // 启用键盘 - Cardputer ADV正确方式
 
-  // 为 Cardputer v1.1 自动适配 GPS 引脚 (防止与键盘矩阵 GPIO 13/15 冲突)
-  if (M5.getBoard() == m5::board_t::board_M5Cardputer) {
-      gpsRxPin = 2; // Cardputer v1.1 Grove G2
-      gpsTxPin = 1; // Cardputer v1.1 Grove G1
-      Serial.println("Cardputer v1.1 detected: Using Grove pins (G2/G1) for GPS to avoid keyboard conflict (G15/G13)");
-  } else {
-      gpsRxPin = 15; // Cardputer ADV 内部 GNSS Rx
-      gpsTxPin = 13; // Cardputer ADV 内部 GNSS Tx
-      Serial.println("Cardputer ADV detected: Using internal GNSS pins (G15/G13)");
+  // 从 NVS 加载用户保存的 GPS 硬件模块配置
+  Preferences prefs;
+  if (prefs.begin("hikepod", true)) {
+    uint8_t savedMod = prefs.getUChar("gps_mod", 0xFF);
+    if (savedMod != 0xFF && savedMod <= 2) {
+      currentGpsModule = (GPSModuleType)savedMod;
+      gpsRxPin = prefs.getInt("gps_rx", -1);
+      gpsTxPin = prefs.getInt("gps_tx", -1);
+      gpsBaud = prefs.getInt("gps_baud", 115200);
+      Serial.printf("[NVS] Loaded GPS module: %d, RX: %d, TX: %d, Baud: %d\n", currentGpsModule, gpsRxPin, gpsTxPin, gpsBaud);
+    }
+    prefs.end();
+  }
+
+  // 若尚未保存过配置，根据硬件型号自动适配默认模块与引脚
+  if (gpsRxPin == -1 || gpsTxPin == -1) {
+    if (M5.getBoard() == m5::board_t::board_M5Cardputer) {
+      currentGpsModule = GPS_MOD_UNIT_V11;
+      gpsRxPin = 1; // Cardputer v1.1 从 Grove 口插入 GPS v1.1 模块 (RX=1, TX=0)
+      gpsTxPin = 0;
+      gpsBaud = 115200;
+      Serial.println("Cardputer v1.1 detected: Default Grove Unit GPS v1.1 (RX:1 / TX:0)");
+    } else {
+      currentGpsModule = GPS_MOD_CAP_LORA1262;
+      gpsRxPin = 15; // Cardputer ADV 内部 / Cap LoRa-1262 (RX=15, TX=13)
+      gpsTxPin = 13;
+      gpsBaud = 115200;
+      Serial.println("Cardputer ADV detected: Default Cap LoRa-1262 (RX:15 / TX:13)");
+    }
   }
   
   // 增加启动延迟以稳定电源和 I2C 总线，并清空初始可能的随机按键输入（解决幽灵按键问题）
@@ -1091,8 +1115,8 @@ void loop() {
   bool rawDel   = M5Cardputer.Keyboard.isKeyPressed(0x2a);
   bool rawTab   = M5Cardputer.Keyboard.isKeyPressed(0x2b);
 
-  const char check_chars[] = "hvcwsiop[]=+-_ t;.,/`abcdefghijklmnopqrstuvwxyz0123456789";
-  const char shift_chars[] = "~!@#$%^&*()_{}:\"<>?|";
+  const char check_chars[] = "hvcwsiop[]=-_ t;.,/`abcdefghijklmnopqrstuvwxyz0123456789";
+  const char shift_chars[] = "~!@#$%^&*()_{}:\"<>?|+";
 
   // 按键去抖与长按状态结构
   struct KeyDebounceState {
@@ -1175,6 +1199,11 @@ void loop() {
   for (size_t i = 0; i < sizeof(shift_chars) - 1; i++) {
     char c = shift_chars[i];
     if (c >= 0 && c < 128) {
+      // 核心防护：KEY_TAB 的 HID Usage 键码为 0x2b (即 ASCII 43 '+')
+      // 当按下物理 Tab 键时，绝对不能被 isKeyPressed('+') 误捕获为加号
+      if (c == '+' && rawTab) {
+        continue;
+      }
       bool isDown = M5Cardputer.Keyboard.isKeyPressed(c);
       if (processKey(isDown, charStates[(uint8_t)c], false)) {
         keys.word.push_back(c);
@@ -1287,9 +1316,9 @@ void loop() {
         needRender = true;
       }
       
-      // 读取GNSS数据
+      // 读取GNSS数据（serialGPSRead内部会通过feed()同时更新TinyGPSPlus和NMEA卫星解析器）
       if (!inStandbyMode) {
-        gnssModule.update();
+        serialGPSRead();
         currentLocation = gnssModule.getCurrentLocation();
         
         // 如果获取到GPS时间，设置系统时间
@@ -1982,7 +2011,7 @@ void drawHikePodHelpMenu(bool should_I) {
       {"[Spc]", I18n::t(T_HELP_LOCK)},
       {"[t]", I18n::t(T_HELP_TRACK)},
       {"[i]", I18n::t(T_HELP_INSERT_POI)},
-      {"[TAB]", I18n::t(T_HELP_GPS_INFO)}
+      {"[s]", I18n::t(T_HELP_TOGGLE_GPS)}
     };
     
     const HelpItem rightCol[] = {
@@ -2115,7 +2144,14 @@ void drawSettingsMenu(bool should_I) {
           else if (showPOIsMode == 1) canvas.print("ON");
           else canvas.print("AUTO");
           break;
-        case 6: // 语言设置
+        case 6: // GPS 模块设置
+          canvas.print(I18n::t(T_SETTINGS_GPS_MODULE));
+          canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+          if (currentGpsModule == GPS_MOD_CAP_LORA1262) canvas.print("LoRa-1262");
+          else if (currentGpsModule == GPS_MOD_UNIT_V11) canvas.print("GPS v1.1");
+          else canvas.print("Custom");
+          break;
+        case 7: // 语言设置
           canvas.print(I18n::t(T_SETTINGS_LANGUAGE));
           canvas.setTextColor(TFT_BLACK, TFT_WHITE);
           canvas.print(I18n::getInstance().isChinese() ? I18n::t(T_LANG_NAME_ZH) : I18n::t(T_LANG_NAME_EN));
@@ -2238,6 +2274,112 @@ void drawSettingsMenu(bool should_I) {
   }
 }
 
+void drawModuleBitmap(int dstX, int dstY, int dstW, int dstH, const uint16_t* srcData, int srcW = 120, int srcH = 120) {
+  for (int dy = 0; dy < dstH; dy++) {
+    int sy = (dy * srcH) / dstH;
+    const uint16_t* row = srcData + sy * srcW;
+    for (int dx = 0; dx < dstW; dx++) {
+      int sx = (dx * srcW) / dstW;
+      canvas.drawPixel(dstX + dx, dstY + dy, row[sx]);
+    }
+  }
+}
+
+void drawGPSModuleSelectionMenu(bool should_I) {
+  if (should_I) {
+    openMenu = true;
+    gpsModuleMenuOpen = true;
+
+    // 1. 全局白底与黑色外单线边框 (8, 6, 224, 123)
+    canvas.fillRect(8, 6, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 12, TFT_WHITE);
+    canvas.drawRect(8, 6, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 12, TFT_BLACK);
+
+    // 2. 标题
+    setUiFont();
+    canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+    canvas.setTextSize(1);
+    canvas.setCursor(14, 11);
+    canvas.print(I18n::t(T_GPS_MOD_TITLE));
+
+    canvas.drawFastHLine(10, 24, 220, 0xD6BA); // 标题分割线
+
+    // 3. 左侧图片展示卡片 (x: 12, y: 28, w: 96, h: 96)
+    int imgX = 12;
+    int imgY = 28;
+    int imgW = 96;
+    int imgH = 96;
+    canvas.drawRect(imgX - 1, imgY - 1, imgW + 2, imgH + 2, TFT_LIGHTGRAY);
+
+    if (gpsModuleMenuSelection == 0) {
+      // 绘制 Cap LoRa-1262 硬件实物大图
+      drawModuleBitmap(imgX, imgY, imgW, imgH, img_cap_lora1262);
+    } else if (gpsModuleMenuSelection == 1) {
+      // 绘制 Unit GPS v1.1 硬件实物大图
+      drawModuleBitmap(imgX, imgY, imgW, imgH, img_unit_gpsv11);
+    } else {
+      // 绘制自定义芯片引脚示意图
+      canvas.fillRect(imgX, imgY, imgW, imgH, 0xF7BE);
+      canvas.drawRect(imgX + 18, imgY + 20, 60, 56, TFT_BLACK);
+      canvas.fillRect(imgX + 20, imgY + 22, 56, 52, 0x3186);
+      canvas.setTextColor(TFT_WHITE, 0x3186);
+      canvas.setFont(&fonts::Font0);
+      canvas.setCursor(imgX + 26, imgY + 36);
+      canvas.print("CUSTOM");
+      canvas.setCursor(imgX + 30, imgY + 48);
+      canvas.print("GNSS");
+      // 引脚接线示意
+      canvas.drawFastHLine(imgX + 4, imgY + 36, 14, TFT_BLACK);
+      canvas.drawFastHLine(imgX + 4, imgY + 54, 14, TFT_BLACK);
+      canvas.drawFastHLine(imgX + 78, imgY + 36, 14, TFT_BLACK);
+      canvas.drawFastHLine(imgX + 78, imgY + 54, 14, TFT_BLACK);
+      canvas.setTextColor(TFT_BLACK, 0xF7BE);
+      canvas.setCursor(imgX + 5, imgY + 26);
+      canvas.print("RX");
+      canvas.setCursor(imgX + 5, imgY + 60);
+      canvas.print("TX");
+    }
+
+    // 4. 右侧选项列表卡片 (x: 113, w: 113)
+    struct ModOption {
+      const char* name;
+      const char* pins;
+    };
+    ModOption options[3] = {
+      {"[1] LoRa-1262", "RX:15 TX:13"},
+      {"[2] GPS v1.1", "RX:1  TX:0"},
+      {"[3] Custom...", "Manual Pins"}
+    };
+
+    int optStartY = 28;
+    int optHeight = 31;
+    for (int i = 0; i < 3; i++) {
+      int curY = optStartY + i * optHeight;
+      bool isSelected = (gpsModuleMenuSelection == i);
+
+      if (isSelected) {
+        canvas.fillRect(113, curY, 113, 29, 0xE73F); // 优雅高亮淡蓝底
+        canvas.drawRect(113, curY, 113, 29, TFT_BLUE);
+      } else {
+        canvas.drawRect(113, curY, 113, 29, 0xEF7D); // 极淡灰边框
+      }
+
+      setUiFont();
+      canvas.setTextColor(isSelected ? TFT_BLUE : TFT_BLACK, isSelected ? 0xE73F : TFT_WHITE);
+      canvas.setCursor(118, curY + 4);
+      canvas.print(options[i].name);
+
+      canvas.setFont(&fonts::Font0);
+      canvas.setTextColor(isSelected ? TFT_BLACK : TFT_DARKGRAY, isSelected ? 0xE73F : TFT_WHITE);
+      canvas.setCursor(124, curY + 17);
+      canvas.print(options[i].pins);
+    }
+
+    canvas.pushSprite(0, 0);
+  } else {
+    gpsModuleMenuOpen = false;
+  }
+}
+
 void drawPowerSavingInfo(bool should_I) {
   // 保留原函数，暂时不使用
   if (should_I == true) {
@@ -2256,6 +2398,26 @@ void renderGPSInfo() {
 }
 
 // Cardputer_GPS_Info 核心功能函数
+void saveGPSModuleConfig(GPSModuleType mod, int rx, int tx, int baud) {
+  currentGpsModule = mod;
+  gpsRxPin = rx;
+  gpsTxPin = tx;
+  gpsBaud = baud;
+  Preferences prefs;
+  if (prefs.begin("hikepod", false)) {
+    prefs.putUChar("gps_mod", (uint8_t)mod);
+    prefs.putInt("gps_rx", rx);
+    prefs.putInt("gps_tx", tx);
+    prefs.putInt("gps_baud", baud);
+    prefs.end();
+    Serial.printf("[NVS] Saved GPS module %d, RX %d, TX %d, Baud %d\n", mod, rx, tx, baud);
+  }
+  // 重新初始化 GPS 串口以应用新引脚
+  initGPSSerial(false);
+  initGPSSerial(true);
+  gpsSerial = true;
+  gpsSerialState = GPS_ON;
+}
 
 /*    Open or close the GPS UART serial console.
 */
@@ -2709,41 +2871,98 @@ void handleGPSInfoKeys(bool keyboardChanged, bool keyboardPressed, Keyboard_Clas
 */
 void drawConfig(bool should_I) {
   if (should_I == true) {
-    openMenu = true;  // 设置openMenu为true，防止updateScreen刷新屏幕
-    if (gpsSerial) { // If active, stop it.
+    openMenu = true;
+    configsMenu = true;
+    if (gpsSerial) {
       gpsSerial = false;
       initGPSSerial(false);
     }
-    canvas.fillRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_BLACK);
-    canvas.drawRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_GREEN);
-    canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+
+    // 1. 全局白底与黑色 1 像素外边框 (10, 10, 220, 115)
+    canvas.fillRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_WHITE);
+    canvas.drawRect(10, 10, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20, TFT_BLACK);
+
+    // 2. 标题与操作指南
+    setUiFont();
+    canvas.setTextColor(TFT_BLUE, TFT_WHITE);
     canvas.setTextSize(1);
-    canvas.setCursor(25, 25);
-    canvas.printf("Configurations:\n");
-    canvas.setCursor(25, 35);
-    canvas.println("Nav: [Up/Dow]. Val: [0-9].");
-    canvas.setCursor(25, 45);
-    canvas.println("Exit: [c]. Save: [ok].");
-    canvas.setCursor(25, 70);
-    canvas.printf("Cardp. RX pin (act:%d): %s %s", gpsRxPin, configsTmp[0].c_str(), configsMenuSel == 0 ? "<" : " ");
-    canvas.setCursor(25, 80);
-    canvas.printf("Cardp. TX pin (act:%d): %s %s", gpsTxPin, configsTmp[1].c_str(), configsMenuSel == 1 ? "<" : " ");
-    canvas.setCursor(25, 90);
-    canvas.printf("Cardp. Baud (act:%d): %s %s", gpsBaud, configsTmp[2].c_str(), configsMenuSel == 2 ? "<" : " ");
+    canvas.setCursor(16, 13);
+    canvas.print(I18n::t(T_CUSTOM_GPS_TITLE));
+
+    canvas.drawFastHLine(10, 27, 220, 0xD6BA); // 标题分割线
+
+    // 3. 3 项引脚与波特率设置条目
+    struct ConfigField {
+      const char* label;
+      int curVal;
+    };
+    ConfigField fields[3] = {
+      { I18n::t(T_CUSTOM_GPS_RX), gpsRxPin },
+      { I18n::t(T_CUSTOM_GPS_TX), gpsTxPin },
+      { I18n::t(T_CUSTOM_GPS_BAUD), gpsBaud }
+    };
+
+    int startY = 32;
+    int rowH = 24;
+
+    for (int i = 0; i < 3; i++) {
+      int curY = startY + i * rowH;
+      bool isSel = (configsMenuSel == i);
+
+      // 背景与边框
+      if (isSel) {
+        canvas.fillRect(14, curY, 212, 22, 0xE73F); // 优雅淡蓝选中条
+        canvas.drawRect(14, curY, 212, 22, TFT_BLUE);
+      } else {
+        canvas.drawRect(14, curY, 212, 22, 0xEF7D); // 极淡灰外边框
+      }
+
+      // 左侧标签文字
+      setUiFont();
+      canvas.setTextColor(isSel ? TFT_BLUE : TFT_BLACK, isSel ? 0xE73F : TFT_WHITE);
+      canvas.setCursor(20, curY + 5);
+      canvas.print(fields[i].label);
+
+      // 右侧数值输入框卡片 (x: 135, y: curY + 2, w: 85, h: 18)
+      int boxX = 135;
+      int boxY = curY + 2;
+      int boxW = 85;
+      int boxH = 18;
+      canvas.fillRect(boxX, boxY, boxW, boxH, TFT_WHITE);
+      canvas.drawRect(boxX, boxY, boxW, boxH, isSel ? TFT_BLUE : TFT_LIGHTGRAY);
+
+      // 显示文本（优先显示临时输入的 configsTmp，若空则显示当前生效值）
+      String valStr = configsTmp[i].length() > 0 ? configsTmp[i] : String(fields[i].curVal);
+      if (isSel) {
+        valStr += "_"; // 光标指示
+      }
+
+      canvas.setFont(&fonts::Font0);
+      canvas.setTextSize(1);
+      canvas.setTextColor(isSel ? TFT_BLUE : TFT_BLACK, TFT_WHITE);
+      canvas.setCursor(boxX + 6, boxY + 5);
+      canvas.print(valStr);
+    }
+
+    // 4. 底部状态与操作说明
+    canvas.drawFastHLine(10, 107, 220, 0xEF7D);
+    canvas.setFont(&fonts::Font0);
+    canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
+    canvas.setCursor(14, 112);
+    canvas.print("[0-9]Val  [Del]Del  [Enter]OK  [Esc]Back");
+
     canvas.pushSprite(0, 0);  // 推送至屏幕
   }
   else {
-    openMenu = false;  // 关闭菜单时重置openMenu
+    openMenu = false;
+    configsMenu = false;
     
     // 根据当前模式选择正确的更新方式
     if (currentMode == MODE_GPS_INFO) {
       updateScreen(true); // Forced update.
     } else if (currentMode == MODE_HIKEPOD) {
-      // 重新渲染地图
       renderMap();
-      // 确保亮度设置生效
       M5Cardputer.Display.setBrightness(screenBrightness);
-      // 推送到屏幕
       canvas.pushSprite(0, 0);
     }
   }
@@ -3030,6 +3249,131 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
         return; // 如果没按 'w' 或 '`'，直接忽略所有其他按键
       }
 
+      // 如果 GPS 模块选择设置窗口打开
+      if (gpsModuleMenuOpen) {
+        if (keys.enter) {
+          if (gpsModuleMenuSelection == 0) {
+            saveGPSModuleConfig(GPS_MOD_CAP_LORA1262, 15, 13, 115200);
+            showStatusToast(I18n::t(T_TOAST_GPS_MOD_SAVED));
+            drawGPSModuleSelectionMenu(false);
+            drawSettingsMenu(true);
+            return;
+          } else if (gpsModuleMenuSelection == 1) {
+            saveGPSModuleConfig(GPS_MOD_UNIT_V11, 1, 0, 115200);
+            showStatusToast(I18n::t(T_TOAST_GPS_MOD_SAVED));
+            drawGPSModuleSelectionMenu(false);
+            drawSettingsMenu(true);
+            return;
+          } else if (gpsModuleMenuSelection == 2) {
+            drawGPSModuleSelectionMenu(false);
+            configsMenu = true;
+            configsMenuSel = 0;
+            configsTmp[0] = String(gpsRxPin);
+            configsTmp[1] = String(gpsTxPin);
+            configsTmp[2] = String(gpsBaud);
+            drawConfig(true);
+            return;
+          }
+        }
+        for (auto key : keys.word) {
+          if (key == '`') { // Esc 退出返回设置菜单
+            drawGPSModuleSelectionMenu(false);
+            drawSettingsMenu(true);
+            return;
+          } else if (key == ';' || key == ',') { // 上 / 左
+            gpsModuleMenuSelection = (gpsModuleMenuSelection - 1 + 3) % 3;
+            drawGPSModuleSelectionMenu(true);
+            return;
+          } else if (key == '.' || key == '/') { // 下 / 右
+            gpsModuleMenuSelection = (gpsModuleMenuSelection + 1) % 3;
+            drawGPSModuleSelectionMenu(true);
+            return;
+          } else if (key == '1') {
+            gpsModuleMenuSelection = 0;
+            drawGPSModuleSelectionMenu(true);
+            return;
+          } else if (key == '2') {
+            gpsModuleMenuSelection = 1;
+            drawGPSModuleSelectionMenu(true);
+            return;
+          } else if (key == '3') {
+            gpsModuleMenuSelection = 2;
+            drawGPSModuleSelectionMenu(true);
+            return;
+          }
+        }
+        return; // 拦截其他按键，防止穿透
+      }
+
+      // 如果自定义 GPS 模块配置窗口打开 (configsMenu)
+      if (configsMenu) {
+        // 1. Esc 或 'c' 退出返回上一级 GPS 模块选择菜单
+        bool closeConfig = false;
+        for (auto key : keys.word) {
+          if (key == '`' || key == 'c') {
+            closeConfig = true;
+            break;
+          }
+        }
+        if (closeConfig) {
+          configsTmp[0] = configsTmp[1] = configsTmp[2] = "";
+          drawConfig(false);
+          drawGPSModuleSelectionMenu(true);
+          return;
+        }
+
+        // 2. 上下/左右方向键切换选择字段
+        for (auto key : keys.word) {
+          if (key == ';' || key == ',') { // 上 / 左
+            configsMenuSel = (configsMenuSel - 1 + 3) % 3;
+            drawConfig(true);
+            return;
+          } else if (key == '.' || key == '/') { // 下 / 右
+            configsMenuSel = (configsMenuSel + 1) % 3;
+            drawConfig(true);
+            return;
+          }
+        }
+
+        // 3. 数字输入 0-9
+        bool textChanged = false;
+        for (auto key : keys.word) {
+          if (key >= '0' && key <= '9') {
+            if (configsMenuSel < 2 && configsTmp[configsMenuSel].length() < 2) {
+              configsTmp[configsMenuSel] += key;
+              textChanged = true;
+            } else if (configsMenuSel == 2 && configsTmp[configsMenuSel].length() < 7) {
+              configsTmp[configsMenuSel] += key;
+              textChanged = true;
+            }
+          }
+        }
+
+        // 4. 退格/删除键
+        if (keys.del && configsTmp[configsMenuSel].length() > 0) {
+          configsTmp[configsMenuSel].remove(configsTmp[configsMenuSel].length() - 1);
+          textChanged = true;
+        }
+
+        // 5. 回车保存并生效
+        if (keys.enter) {
+          if (configsTmp[0].length() > 0) gpsRxPin = configsTmp[0].toInt();
+          if (configsTmp[1].length() > 0) gpsTxPin = configsTmp[1].toInt();
+          if (configsTmp[2].length() > 0) gpsBaud = configsTmp[2].toInt();
+          configsTmp[0] = configsTmp[1] = configsTmp[2] = "";
+          drawConfig(false);
+          saveGPSModuleConfig(GPS_MOD_CUSTOM, gpsRxPin, gpsTxPin, gpsBaud);
+          showStatusToast(I18n::t(T_TOAST_GPS_MOD_SAVED));
+          drawSettingsMenu(true);
+          return;
+        }
+
+        if (textChanged) {
+          drawConfig(true);
+        }
+        return; // 拦截其他所有按键，防止穿透
+      }
+
       // 处理提示信息框的关闭
       if (gpsNoFixAlertVisible || kmlFullAlertVisible || notTrackingAlertVisible) {
         bool dismiss = keys.enter;
@@ -3047,7 +3391,8 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
         }
       }
       
-      // 检查Tab键切换模式 (放在前面，确保模式切换优先)
+      // Tab 键切换模式功能已隐藏 (GPS 功能已完整融入 HikePod 模式)
+      /*
       if (keys.tab) {
         static unsigned long lastTabPress = 0;
         const unsigned long TAB_DEBOUNCE_DELAY = 200;
@@ -3067,6 +3412,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
           fileSelectionMenuOpen = false;
         }
       }
+      */
       
       // 如果帮助菜单打开，按 'h' 或 '`' (Esc) 键退出
       if (helpMenuVisible) {
@@ -3114,6 +3460,26 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             }
             lastHPress = currentTime;
           }
+        } else if (key == 's' && currentMode == MODE_HIKEPOD) {
+          // 切换 GPS 开关 (带 200ms 防抖)
+          static unsigned long lastSPress = 0;
+          const unsigned long S_DEBOUNCE_DELAY = 200;
+          unsigned long currentTime = millis();
+          if (currentTime - lastSPress > S_DEBOUNCE_DELAY) {
+            if (!settingsMenuOpen && !fileSelectionMenuOpen && !openMenu && !helpMenuVisible && !gpsModuleMenuOpen) {
+              gpsSerial = !gpsSerial;
+              initGPSSerial(gpsSerial);
+              gpsSerialState = gpsSerial ? GPS_ON : GPS_OFF;
+              if (gpsSerial) {
+                showStatusToast(I18n::t(T_TOAST_GPS_ON));
+              } else {
+                showStatusToast(I18n::t(T_TOAST_GPS_OFF));
+              }
+              renderMap();
+              canvas.pushSprite(0, 0);
+            }
+            lastSPress = currentTime;
+          }
         } else if (key == 'v' && currentMode == MODE_HIKEPOD) {
           // 切换视图模式
           static unsigned long lastVPress = 0;
@@ -3160,7 +3526,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             renderMap();
             canvas.pushSprite(0, 0);
           }
-        } else if ((key == '=' || key == '+') && currentMode == MODE_HIKEPOD) {
+        } else if ((key == '=' || key == '+') && !keys.tab && currentMode == MODE_HIKEPOD) {
           // 视图缩放 - 放大 (+25%)
           static unsigned long lastEqualPress = 0;
           const unsigned long EQUAL_DEBOUNCE_DELAY = 150;
@@ -3352,7 +3718,17 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                 case 5: // Show POIs
                   showPOIsMode = (showPOIsMode + 1) % 3;
                   break;
-                case 6: // Language (中英切换并保存至 NVS)
+                case 6: // GPS Module
+                  currentGpsModule = (GPSModuleType)((currentGpsModule - 1 + 3) % 3);
+                  if (currentGpsModule == GPS_MOD_CAP_LORA1262) {
+                    saveGPSModuleConfig(GPS_MOD_CAP_LORA1262, 15, 13, 115200);
+                  } else if (currentGpsModule == GPS_MOD_UNIT_V11) {
+                    saveGPSModuleConfig(GPS_MOD_UNIT_V11, 1, 0, 115200);
+                  } else {
+                    saveGPSModuleConfig(GPS_MOD_CUSTOM, gpsRxPin, gpsTxPin, gpsBaud);
+                  }
+                  break;
+                case 7: // Language (中英切换并保存至 NVS)
                   if (I18n::getInstance().isChinese()) {
                     I18n::getInstance().setLanguage(LANG_EN);
                   } else {
@@ -3383,7 +3759,17 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
                 case 5: // Show POIs
                   showPOIsMode = (showPOIsMode + 1) % 3;
                   break;
-                case 6: // Language (中英切换并保存至 NVS)
+                case 6: // GPS Module
+                  currentGpsModule = (GPSModuleType)((currentGpsModule + 1) % 3);
+                  if (currentGpsModule == GPS_MOD_CAP_LORA1262) {
+                    saveGPSModuleConfig(GPS_MOD_CAP_LORA1262, 15, 13, 115200);
+                  } else if (currentGpsModule == GPS_MOD_UNIT_V11) {
+                    saveGPSModuleConfig(GPS_MOD_UNIT_V11, 1, 0, 115200);
+                  } else {
+                    saveGPSModuleConfig(GPS_MOD_CUSTOM, gpsRxPin, gpsTxPin, gpsBaud);
+                  }
+                  break;
+                case 7: // Language (中英切换并保存至 NVS)
                   if (I18n::getInstance().isChinese()) {
                     I18n::getInstance().setLanguage(LANG_EN);
                   } else {
@@ -3426,6 +3812,17 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
           } else if (settingsMenuSelection == 5) { // Show POIs
             showPOIsMode = (showPOIsMode + 1) % 3;
             drawSettingsMenu(true);
+          } else if (settingsMenuSelection == 6) { // GPS 模块选择详细弹窗
+            drawSettingsMenu(false);
+            gpsModuleMenuSelection = (int)currentGpsModule;
+            drawGPSModuleSelectionMenu(true);
+          } else if (settingsMenuSelection == 7) { // 语言切换
+            if (I18n::getInstance().isChinese()) {
+              I18n::getInstance().setLanguage(LANG_EN);
+            } else {
+              I18n::getInstance().setLanguage(LANG_ZH);
+            }
+            drawSettingsMenu(true);
           }
         }
       }
@@ -3440,12 +3837,16 @@ void handleKeys(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::Keys
     if (keyboardChanged) {
       if (keyboardPressed) {
         
-        // Check if 'c' key is pressed to close the config menu
+        // Check if 'c' or '`' (Esc) key is pressed to close the config menu
         for (auto c : keys.word) {
-          if (c == 'c') {
+          if (c == 'c' || c == '`') {
             configsMenu = false;
-            openMenu = false; // 确保菜单状态被重置
-            updateScreen(true);
+            if (currentMode == MODE_HIKEPOD) {
+              drawSettingsMenu(true);
+            } else {
+              openMenu = false; // 确保菜单状态被重置
+              updateScreen(true);
+            }
             return;
           }
         }
@@ -3478,7 +3879,13 @@ void handleKeys(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::Keys
           configsTmp[0] = configsTmp[1] = configsTmp[2] = "";
           configsMenu = false;
           openMenu = false; // 确保菜单状态被重置
-          updateScreen(true);
+          saveGPSModuleConfig(GPS_MOD_CUSTOM, gpsRxPin, gpsTxPin, gpsBaud);
+          showStatusToast(I18n::t(T_TOAST_GPS_MOD_SAVED));
+          if (currentMode == MODE_HIKEPOD) {
+            drawSettingsMenu(true);
+          } else {
+            updateScreen(true);
+          }
           return;
         }
         

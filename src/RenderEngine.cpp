@@ -478,9 +478,7 @@ void RenderEngine::drawDebugInfo(const Location& currentLocation, int routePoint
       canvas->setCursor(startX, startY + 10);
       canvas->println("GPS: NOT INITIALIZED");
       canvas->setCursor(startX, startY + 20);
-      canvas->println("Press 's' in GPS Info mode");
-      canvas->setCursor(startX, startY + 30);
-      canvas->println("to start GPS");
+      canvas->println("Press 's' to start GPS");
     } else {
       // 绘制GPS信息（向上移动5）
       bool gpsFixed = currentLocation.isValid;
@@ -553,6 +551,69 @@ void RenderEngine::drawDebugInfo(const Location& currentLocation, int routePoint
       canvas->printf("Route Points: %d (total: %d)\n", routePointCount, pointCount);
     } else {
       canvas->printf("Route Points: %d\n", routePointCount);
+    }
+
+    // 绘制右侧白底黑线卫星天球图 (Sky Plot)
+    if (satellitesData != nullptr) {
+      int cx = startX + 184;
+      int cy = 76;
+      int r = 38;
+      drawSkyPlot(*satellitesData, currentLocation.isValid, cx, cy, r);
+    }
+  }
+}
+
+void RenderEngine::drawSkyPlot(const std::vector<SatData>& satellites, bool isValidFix, int cx, int cy, int r) {
+  if (!canvas) return;
+
+  // 1. 白底与浅灰外边框
+  canvas->fillRect(cx - r - 2, cy - r - 2, (r + 2) * 2, (r + 2) * 2, TFT_WHITE);
+  canvas->drawRect(cx - r - 2, cy - r - 2, (r + 2) * 2, (r + 2) * 2, TFT_LIGHTGRAY);
+
+  // 2. 黑色线条圆圈与分度十字线
+  canvas->drawCircle(cx, cy, r, TFT_BLACK);                   // 90°地平外圈
+  canvas->drawCircle(cx, cy, (int)(r * 0.66f), 0xC618);      // 30°仰角圈 (浅灰)
+  canvas->drawCircle(cx, cy, (int)(r * 0.33f), 0xC618);      // 60°仰角圈 (浅灰)
+  canvas->drawLine(cx - r, cy, cx + r, cy, 0xC618);          // 东西经线
+  canvas->drawLine(cx, cy - r, cx, cy + r, 0xC618);          // 南北纬线
+
+  // 3. 黑色方位标记 (N, S, E, W)
+  canvas->setTextSize(1);
+  canvas->setTextDatum(MC_DATUM);
+  canvas->setTextColor(TFT_BLACK, TFT_WHITE);
+  canvas->drawString("N", cx, cy - r + 6);
+  canvas->drawString("S", cx, cy + r - 6);
+  canvas->drawString("E", cx + r - 6, cy);
+  canvas->drawString("W", cx - r + 6, cy);
+
+  // 4. 绘制卫星点与编号（与原 GPS Info 模式一致：仅在获取有效定位 fix 时绘制）
+  if (isValidFix) {
+    for (const auto& sat : satellites) {
+      float elev = constrain((float)sat.elevation, 0.0f, 90.0f);
+      float az   = fmod((float)sat.azimuth + 360.0f, 360.0f);
+      float rad = (90.0f - elev) / 90.0f * (float)r;
+      float radAz = radians(az);
+      int sx = cx + (int)(rad * sin(radAz));
+      int sy = cy - (int)(rad * cos(radAz));
+
+      // 卫星颜色体系：解算=绿, 可见=黄, 其它=红
+      uint16_t color = TFT_RED;
+      if (sat.used) {
+        color = TFT_GREEN;
+      } else if (sat.visible) {
+        color = TFT_YELLOW;
+      }
+
+      // 绘制卫星实体点与微黑边
+      canvas->fillCircle(sx, sy, 2, color);
+      canvas->drawCircle(sx, sy, 2, TFT_BLACK);
+
+      // 卫星编号 (显示在右上方)
+      canvas->setTextSize(0);
+      canvas->setFont(&fonts::Font0);
+      canvas->setTextColor(TFT_BLACK, TFT_WHITE);
+      canvas->setCursor(sx + 3, sy - 4);
+      canvas->printf("%d", sat.id);
     }
   }
 }

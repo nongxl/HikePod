@@ -14,14 +14,21 @@ const char* const I18n::_strings[2][T_COUNT] = {
         "> GPS Int : ",
         "> ScreenOff GPS : ",
         "> Show POIs : ",
+        "> GPS Module : ",
         "> Language : ",
         "English",
         "Chinese",
         "Battery Consumption :",
 
+        // GPS Module Window
+        "GPS Module Setup",
+        "Cap LoRa-1262 (RX:15 TX:13)",
+        "Unit GPS v1.1 (RX:1 TX:0)",
+        "Custom Pins...",
+
         // KML List
         "Select KML File",
-        "[;/. ] Move | [Enter] Load | [r] Rename | [BS] Exit",
+        "[Enter] Load | [r] Rename | [BS] Exit",
 
         // Help
         "HikePod Help",
@@ -38,6 +45,7 @@ const char* const I18n::_strings[2][T_COUNT] = {
         "Vert scale",
         "Debug info",
         "Pan map",
+        "Toggle GPS",
 
         // USB
         "USB Transfer (MSC)",
@@ -74,6 +82,9 @@ const char* const I18n::_strings[2][T_COUNT] = {
         "Rename Failed",
         "GPS Follow: ON",
         "Free Pan Mode",
+        "GPS: ON",
+        "GPS: OFF",
+        "Applied Module: ",
 
         // Dialog
         "Insert Waypoint (POI)",
@@ -88,6 +99,12 @@ const char* const I18n::_strings[2][T_COUNT] = {
         "Enter new name (.kml not needed)",
         "Press Enter to confirm rename",
         "[Enter] Rename | [ESC] Exit | [Tab] IME",
+
+        // Custom GPS
+        "Custom GPS Module Setup",
+        "RX Pin (Receive):",
+        "TX Pin (Transmit):",
+        "Baud Rate (bps):",
     },
 
     // -------------------------------------------------------------
@@ -103,14 +120,21 @@ const char* const I18n::_strings[2][T_COUNT] = {
         "> GPS 运行间隔 : ",
         "> GPS 息屏间隔 : ",
         "> 关键点显示 : ",
+        "> GPS 模块设置 : ",
         "> 系统语言 : ",
         "English",
         "简体中文",
         "电池消耗曲线 :",
 
+        // GPS 模块窗口
+        "GPS 硬件模块设置",
+        "Cap LoRa-1262 (RX:15 TX:13)",
+        "Unit GPS v1.1 (RX:1 TX:0)",
+        "自定义引脚...",
+
         // KML List
         "选择 KML 路线文件",
-        "[;/. ] 移动 | [Enter] 加载 | [r] 重命名 | [BS] 退出",
+        "[Enter] 加载 | [r] 重命名 | [BS] 退出",
 
         // Help
         "HikePod 按键帮助",
@@ -127,6 +151,7 @@ const char* const I18n::_strings[2][T_COUNT] = {
         "3D 垂直比例",
         "调试信息",
         "平移地图",
+        "开关 GPS",
 
         // USB
         "USB 存储传输 (MSC)",
@@ -163,6 +188,9 @@ const char* const I18n::_strings[2][T_COUNT] = {
         "重命名失败",
         "定位跟随已开启",
         "自由浏览模式",
+        "GPS: 开启",
+        "GPS: 关闭",
+        "已应用模块: ",
 
         // Dialog
         "插入途经标注点 (POI)",
@@ -177,5 +205,11 @@ const char* const I18n::_strings[2][T_COUNT] = {
         "输入新文件名 (无需填写 .kml)",
         "按回车确认修改并刷新",
         "[Enter] 重命名 | [ESC] 退出 | [Tab] 输入法",
+
+        // Custom GPS
+        "自定义 GPS 模块引脚",
+        "RX 引脚 (接收):",
+        "TX 引脚 (发送):",
+        "波特率 (bps):",
     }
 };

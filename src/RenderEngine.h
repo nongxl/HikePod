@@ -5,6 +5,7 @@
 #include "GNSSModule.h"
 #include <M5GFX.h>
 #include "KMLParser.h"
+#include "SatData.h"
 
 // 缩放级别定义：每个级别对应屏幕宽度覆盖的真实距离（米）
 enum MapZoom {
@@ -76,6 +77,9 @@ public:
   
   // 设置GNSS模块引用
   void setGNSSModule(GNSSModule* gnssModule);
+  
+  // 设置卫星数据引用（用于调试面板显示Sky Plot）
+  void setSatellites(const std::vector<SatData>* sats) { satellitesData = sats; }
   
   // 设置起点坐标
   void setStartPoint(const Location& startPoint);
@@ -198,6 +202,8 @@ private:
   bool debugVisible;
   // 调试信息动画位置
   int debugPosition;
+  // 卫星数据引用
+  const std::vector<SatData>* satellitesData = nullptr;
   
   // 海拔图相关
   bool elevationChartVisible;  // 海拔图是否可见
@@ -349,6 +355,9 @@ private:
   
   // 绘制调试信息
   void drawDebugInfo(const Location& currentLocation, int routePointCount, bool sdInitialized = false, bool hasRoute = false, int pointCount = 0);
+  
+  // 绘制卫星天球图（白底黑线风格）
+  void drawSkyPlot(const std::vector<SatData>& satellites, bool isValidFix, int cx, int cy, int r);
   
   // 计算点到线段的最短距离和投影参数
   double distanceToSegment(const Location& point, const Location& p1, const Location& p2, double& t, Location& projection);
