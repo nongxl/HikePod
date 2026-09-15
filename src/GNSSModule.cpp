@@ -11,13 +11,17 @@ GNSSModule::GNSSModule() :
   baudRate(9600),
   isInitialized(false),
   isInStandby(false),
-  timezoneOffsetHours(0) {
+  timezoneOffsetHours(8),
+  startTime(0) {
 }
 
 void GNSSModule::begin(int rxPin, int txPin, long baudRate) {
   this->rxPin = rxPin;
   this->txPin = txPin;
   this->baudRate = baudRate;
+  this->startTime = millis();
+  gpsChars = 0;
+  gpsSentences = 0;
   
   gpsSerial.begin(baudRate, SERIAL_8N1, rxPin, txPin);
   isInitialized = true;
@@ -27,6 +31,7 @@ void GNSSModule::end() {
   if (isInitialized) {
     gpsSerial.end();
     isInitialized = false;
+    startTime = 0;
   }
 }
 
@@ -168,6 +173,15 @@ uint32_t GNSSModule::getGpsChars() {
 
 uint32_t GNSSModule::getGpsSentences() {
   return gpsSentences;
+}
+
+long GNSSModule::getBaudRate() const {
+  return baudRate;
+}
+
+unsigned long GNSSModule::getSearchDurationMs() const {
+  if (!isInitialized) return 0;
+  return millis() - startTime;
 }
 
 bool GNSSModule::feed(char c) {

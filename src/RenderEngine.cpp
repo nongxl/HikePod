@@ -297,10 +297,11 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
 
   // 清空canvas
   canvas->fillScreen(TFT_WHITE);
-  // 确保canvas的颜色模式正确
+  // 确保canvas的颜色、对齐与字体基准绝对稳定
   canvas->setTextColor(TFT_BLACK);
   canvas->setTextSize(1);
-  canvas->setTextDatum(MC_DATUM);
+  canvas->setTextDatum(TL_DATUM);
+  canvas->setFont(&fonts::Font0);
   
   // 设置屏幕亮度
   // 注意：这里不设置亮度，因为亮度应该由main.cpp中的全局变量控制
@@ -342,6 +343,9 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
   // 绘制电量信息
   drawBatteryInfo();
   
+  // 绘制屏幕顶部中央 GPS 时间
+  drawTopTimeInfo();
+  
   // 绘制Tracking状态
   if (trackingState) {
     // 更新动态点计数器
@@ -353,7 +357,10 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
     
     canvas->setTextColor(TFT_RED);
     canvas->setTextSize(1);
-    canvas->setCursor(screenWidth / 2 - 25, 10);
+    // 若顶部中央显示了有效时间，下移至 y=22 避免重叠
+    bool hasValidTime = (gnssModule && gnssModule->isTimeValid() && gnssModule->isDateValid() && gnssModule->getYear() >= 2024);
+    int trackingY = hasValidTime ? 22 : 10;
+    canvas->setCursor(screenWidth / 2 - 25, trackingY);
     
     // 根据计数器显示不同数量的点
     canvas->print("Tracking");
@@ -444,8 +451,8 @@ void RenderEngine::render(const std::vector<Location>& routePoints, const Locati
 }
 
 void RenderEngine::drawOperationHint() {
-  // 设置文本颜色为黑色，但不设置背景色以避免黑色背景
-  canvas->setTextColor(TFT_BLACK);
+  // 设置文本颜色为灰色
+  canvas->setTextColor(TFT_DARKGRAY);
   canvas->setTextSize(1);
   canvas->setCursor(10, screenHeight - 20);
   canvas->println("; , . / : Pan | +/-: Zoom");
@@ -459,6 +466,8 @@ void RenderEngine::drawDebugInfo(const Location& currentLocation, int routePoint
     // 设置文本颜色为黑色
     canvas->setTextColor(TFT_BLACK);
     canvas->setTextSize(1);
+    canvas->setTextDatum(TL_DATUM);
+    canvas->setFont(&fonts::Font0);
     
     // 保存当前光标位置，用于整体移动（向左移动5，整体向上移动5）
     int startX = debugPosition;
@@ -483,18 +492,28 @@ void RenderEngine::drawDebugInfo(const Location& currentLocation, int routePoint
     }
     
     if (!gpsInitialized) {
-      // 如果GPS未初始化，显示未初始化提示（向上移动5）
-      canvas->setCursor(startX, startY + 10);
-      canvas->println("GPS: NOT INITIALIZED");
-      canvas->setCursor(startX, startY + 20);
-      canvas->println("Press 's' to start GPS");
+      // 如果GPS未初始化，显示未初始化提示（首行与开启状态对齐在 startY + 10，杜绝位移抖动）
+      if (I18n::getInstance().isChinese()) {
+        canvas->setFont(&fonts::efontCN_12);
+        canvas->setCursor(startX, startY + 10);
+        canvas->print(I18n::t(T_DEBUG_GPS_OFF));
+        canvas->setCursor(startX, startY + 24);
+        canvas->print(I18n::t(T_DEBUG_GPS_START_HINT));
+        canvas->setFont(&fonts::Font0);
+      } else {
+        canvas->setCursor(startX, startY + 10);
+        canvas->println(I18n::t(T_DEBUG_GPS_OFF));
+        canvas->setCursor(startX, startY + 20);
+        canvas->println(I18n::t(T_DEBUG_GPS_START_HINT));
+      }
     } else {
       // 绘制GPS信息（向上移动5）
       bool gpsFixed = currentLocation.isValid;
       
-      // 绘制波特率
+      // 绘制真实波特率
+      long baud = gnssModule ? gnssModule->getBaudRate() : 0;
       canvas->setCursor(startX, startY + 10);
-      canvas->println("Baud Rate: 115200");
+      canvas->printf("Baud Rate: %ld\n", baud);
       
       // 绘制接收字符数
       uint32_t gpsChars = 0;
@@ -520,12 +539,71 @@ void RenderEngine::drawDebugInfo(const Location& currentLocation, int routePoint
       canvas->setCursor(startX, startY + 40);
       canvas->printf("Signal/Sats: %s/%d\n", gpsFixed ? "FIXED" : "SEARCHING", satCount);
       
-      // 绘制经纬度
+      // GPS 状态诊断与提醒 (无数据或超时)
+      uint32_t searchDuration = gnssModule ? gnssModule->getSearchDurationMs() : 0;
+      bool isNoData = (baud == 0 || gpsChars == 0) && (searchDuration > 2500);
+      bool isFixTimeout = (gpsChars > 0) && (!gpsFixed) && (searchDuration > 60000);
+
+      // 绘制经纬度或诊断异常提示（高度控制在屏幕 135 像素内，绝不超屏）
       if (gpsFixed) {
         canvas->setCursor(startX, startY + 50);
         canvas->printf("Lat/Lon: %.6f/%.6f\n", currentLocation.latitude, currentLocation.longitude);
         canvas->setCursor(startX, startY + 60);
         canvas->printf("Altitude: %.2f m\n", currentLocation.altitude);
+      } else if (isNoData) {
+        // 无数据：在原经纬度位置高亮显示诊断与切换指引
+        if (detectedAltModule != -1) {
+          const char* modName = (detectedAltModule == 1) ? "Unit GPS" : "LoRa-1262";
+          if (I18n::getInstance().isChinese()) {
+            canvas->setFont(&fonts::efontCN_12);
+            canvas->setTextColor(TFT_RED);
+            canvas->setCursor(startX, startY + 48);
+            canvas->printf("检测到: %s", modName);
+            canvas->setCursor(startX, startY + 62);
+            canvas->print("按'y'确认切换");
+            canvas->setFont(&fonts::Font0);
+          } else {
+            canvas->setTextColor(TFT_RED);
+            canvas->setCursor(startX, startY + 50);
+            canvas->printf("Found: %s", modName);
+            canvas->setCursor(startX, startY + 60);
+            canvas->println("Press 'y' to switch");
+          }
+        } else {
+          if (I18n::getInstance().isChinese()) {
+            canvas->setFont(&fonts::efontCN_12);
+            canvas->setTextColor(TFT_RED);
+            canvas->setCursor(startX, startY + 48);
+            canvas->print("无数据:请检查设置");
+            canvas->setCursor(startX, startY + 62);
+            canvas->print("正在探测备选引脚...");
+            canvas->setFont(&fonts::Font0);
+          } else {
+            canvas->setTextColor(TFT_RED);
+            canvas->setCursor(startX, startY + 50);
+            canvas->println("No data: Check setup");
+            canvas->setCursor(startX, startY + 60);
+            canvas->println("Probing alt pins...");
+          }
+        }
+        canvas->setTextColor(TFT_BLACK);
+      } else if (isFixTimeout) {
+        if (I18n::getInstance().isChinese()) {
+          canvas->setFont(&fonts::efontCN_12);
+          canvas->setTextColor(TFT_RED);
+          canvas->setCursor(startX, startY + 48);
+          canvas->print("搜星超时!到开阔地");
+          canvas->setCursor(startX, startY + 62);
+          canvas->print("请到开阔地重新定位");
+          canvas->setFont(&fonts::Font0);
+        } else {
+          canvas->setTextColor(TFT_RED);
+          canvas->setCursor(startX, startY + 50);
+          canvas->println("Fix timeout! Open sky");
+          canvas->setCursor(startX, startY + 60);
+          canvas->println("Waiting for fix...");
+        }
+        canvas->setTextColor(TFT_BLACK);
       } else {
         canvas->setCursor(startX, startY + 50);
         canvas->println("Lat/Lon: Waiting...");
@@ -1101,7 +1179,9 @@ void RenderEngine::drawCurrentLocation(const Location& location, const std::vect
 }
 
 void RenderEngine::drawCoordinateInfo(const Location& location) {
-  // 设置文本颜色为黑色，但不设置背景色以避免黑色背景
+  // 确保文本基准绝对稳定
+  canvas->setFont(&fonts::Font0);
+  canvas->setTextDatum(TL_DATUM);
   canvas->setTextColor(TFT_BLACK);
   canvas->setTextSize(1);
   
@@ -1294,7 +1374,9 @@ void RenderEngine::draw3DScaleBar() {
 }
 
 void RenderEngine::drawBatteryInfo() {
-  // 设置文本颜色为黑色
+  // 确保文本基准绝对稳定
+  canvas->setFont(&fonts::Font0);
+  canvas->setTextDatum(TL_DATUM);
   canvas->setTextColor(TFT_BLACK);
   canvas->setTextSize(1);
   
@@ -1304,6 +1386,27 @@ void RenderEngine::drawBatteryInfo() {
     canvas->setCursor(screenWidth - 25, 10);
     canvas->printf("%d%%", battery);
   }
+}
+
+void RenderEngine::drawTopTimeInfo() {
+  if (!gnssModule || !gnssModule->isTimeValid() || !gnssModule->isDateValid()) {
+    return;
+  }
+  // 年份必须是有效年份（>= 2024），未授时前绝对不显示无效假时间
+  if (gnssModule->getYear() < 2024) {
+    return;
+  }
+  
+  canvas->setTextColor(TFT_BLACK);
+  canvas->setTextSize(1);
+  canvas->setTextDatum(TC_DATUM);
+  char timeBuf[16];
+  snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", 
+           gnssModule->getLocalHour(), 
+           gnssModule->getLocalMinute(), 
+           gnssModule->getLocalSecond());
+  canvas->drawString(timeBuf, screenWidth / 2, 10);
+  canvas->setTextDatum(TL_DATUM);
 }
 
 void RenderEngine::drawTrack(const std::vector<Location>& trackPoints) {
@@ -2045,6 +2148,9 @@ void RenderEngine::render3D(const std::vector<Location>& routePoints, const Loca
   draw3DCurrentLocation(currentLocation);
   
   draw3DUIInfo();
+  
+  // 绘制屏幕顶部中央 GPS 时间
+  drawTopTimeInfo();
 }
 
 // 绘制3D地面网格

@@ -110,6 +110,8 @@ public:
   // 获取调试计数器
   uint32_t getGpsChars();
   uint32_t getGpsSentences();
+  long getBaudRate() const;
+  unsigned long getSearchDurationMs() const;
 
   // 供外部调用，传入字符进行解析（避免串口读取冲突）
   bool feed(char c);
@@ -130,6 +132,8 @@ private:
   bool isInitialized;
   bool isInStandby; // 跟踪是否处于待机模式
   int timezoneOffsetHours; // 时区偏移（小时）
+  unsigned long startTime; // 模块启动时间戳
+
   
   // 调试计数器
   static uint32_t gpsChars;

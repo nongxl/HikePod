@@ -413,6 +413,12 @@ GPSState gpsSerialState = GPS_OFF;
 const unsigned long GPS_TIMEOUT = 120000; // 增加到120秒，适应GPS模块长时间运行需求
 unsigned long lastValidGpsMillis = 0;
 
+int detectedAltModule = -1; // 嗅探到的备选GPS模块类型(-1: 未检测到)
+bool gpsDetectedDialogOpen = false;
+bool gpsDetectedDialogDismissed = false;
+void probeAlternateGpsModule();
+void drawGPSModuleDetectedDialog(bool should_I);
+
 
 // 新增函数：列出HikePod文件夹中的.kml文件
 std::vector<String> listKMLFiles() {
@@ -523,7 +529,7 @@ void drawFileSelectionMenu() {
   
   // 底部操作提示
   setUiFont();
-  canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+  canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
   canvas.setCursor(10, SCREEN_HEIGHT - (I18n::getInstance().isChinese() ? 13 : 11));
   canvas.print(I18n::t(T_FILE_SELECT_HINT));
 
@@ -902,7 +908,7 @@ void enterUsbMscMode() {
   canvas.print(I18n::t(T_USB_HINT_2));
 
   canvas.setCursor(20, 106);
-  canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+  canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
   canvas.print(I18n::t(T_USB_EXIT_HINT));
 
   canvas.pushSprite(0, 0);
@@ -993,6 +999,7 @@ void setup() {
       gpsRxPin = prefs.getInt("gps_rx", -1);
       gpsTxPin = prefs.getInt("gps_tx", -1);
       gpsBaud = prefs.getInt("gps_baud", 115200);
+      if (gpsBaud <= 0) gpsBaud = 115200;
       // 纠正历史版本中 Unit GPS 误将 TX 设为 0 (BOOT 引脚) 的错误
       if (currentGpsModule == GPS_MOD_UNIT_V11 && gpsTxPin == 0) {
         gpsTxPin = 2;
@@ -1193,6 +1200,9 @@ void loop() {
     serialGPSRead();
   }
 
+  // 备选 GPS 模块嗅探（当当前模块无数据时自动探测另一个预设模块是否有数据）
+  probeAlternateGpsModule();
+
   // 更新Cardputer状态（键盘、按钮、传感器等）
   M5Cardputer.update();
   
@@ -1278,8 +1288,8 @@ void loop() {
     char c = check_chars[i];
     if (c >= 0 && c < 128) {
       bool isDown = M5Cardputer.Keyboard.isKeyPressed(c);
-      // 方向键与空格键允许长按连按，普通字母敲击单次触发
-      bool allowRepeat = (c == ';' || c == '.' || c == ',' || c == '/' || c == ' ');
+      // 方向键、空格键与地图缩放键（-/=）允许长按连按，普通字母敲击单次触发
+      bool allowRepeat = (c == ';' || c == '.' || c == ',' || c == '/' || c == ' ' || c == '-' || c == '=');
       if (processKey(isDown, charStates[(uint8_t)c], allowRepeat)) {
         keys.word.push_back(c);
         keyboardChanged = true;
@@ -1297,7 +1307,9 @@ void loop() {
         continue;
       }
       bool isDown = M5Cardputer.Keyboard.isKeyPressed(c);
-      if (processKey(isDown, charStates[(uint8_t)c], false)) {
+      // Shift 组合缩放键（+/-）允许长按连发
+      bool allowRepeat = (c == '+' || c == '_');
+      if (processKey(isDown, charStates[(uint8_t)c], allowRepeat)) {
         keys.word.push_back(c);
         keyboardChanged = true;
       }
@@ -1741,6 +1753,8 @@ void loop() {
           canvas.setTextColor(TFT_BLACK);
           canvas.setCursor(x, y);
           canvas.print(statusToastText);
+          canvas.setFont(&fonts::Font0); // 必须立即恢复默认Font0，严防字体状态残留污染下一帧
+          canvas.setTextDatum(TL_DATUM);
         }
         canvas.pushSprite(0, 0);  // 推送至屏幕
         lastRenderTime = currentTime;
@@ -1858,6 +1872,7 @@ void drawHttpServerWindow(bool should_I) {
     canvas.println(I18n::getInstance().isChinese() ? "连接 WiFi 并访问 IP 地址以管理 KML" : "Connect to WiFi & Visit IP to manage KML");
     
     canvas.setCursor(20, 106);
+    canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
     canvas.println(I18n::t(T_WIFI_HINT_EXIT));
     
     canvas.pushSprite(0, 0);
@@ -1972,7 +1987,7 @@ void drawTextInputDialog(bool should_I) {
         canvas.print(I18n::t(T_DIALOG_POI_QUICK_2));
 
         setUiFont();
-        canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+        canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
         canvas.setCursor(20, 102);
         canvas.print(I18n::t(T_DIALOG_SAVE_HINT));
       } else if (currentInputType == INPUT_TRACKING_FILENAME) {
@@ -1984,7 +1999,7 @@ void drawTextInputDialog(bool should_I) {
         canvas.print(I18n::t(T_DIALOG_TRACK_HINT_2));
 
         setUiFont();
-        canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+        canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
         canvas.setCursor(20, 102);
         canvas.print(I18n::t(T_DIALOG_START_HINT));
       } else { // INPUT_RENAME_KML
@@ -1996,7 +2011,7 @@ void drawTextInputDialog(bool should_I) {
         canvas.print(I18n::t(T_DIALOG_RENAME_HINT_2));
 
         setUiFont();
-        canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+        canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
         canvas.setCursor(20, 102);
         canvas.print(I18n::t(T_DIALOG_RENAME_HINT_3));
       }
@@ -2495,6 +2510,83 @@ void drawGPSModuleSelectionMenu(bool should_I) {
   }
 }
 
+void drawGPSModuleDetectedDialog(bool should_I) {
+  if (should_I) {
+    if (detectedAltModule == -1) return;
+    openMenu = true;
+    gpsDetectedDialogOpen = true;
+
+    // 1. 白色底卡片与黑色外单线边框 (x: 10, y: 8, w: 220, h: 119)
+    canvas.fillRect(10, 8, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 16, TFT_WHITE);
+    canvas.drawRect(10, 8, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 16, TFT_BLACK);
+
+    // 2. 标题
+    setUiFont();
+    canvas.setTextColor(TFT_BLUE, TFT_WHITE);
+    canvas.setTextSize(1);
+    canvas.setCursor(16, 13);
+    canvas.print(I18n::t(T_DIALOG_GPS_DETECTED_TITLE));
+
+    canvas.drawFastHLine(12, 27, 216, 0xD6BA); // 标题分割线
+
+    // 3. 左侧模块实物大图卡片 (x: 16, y: 32, w: 76, h: 76)
+    int imgX = 16;
+    int imgY = 32;
+    int imgW = 76;
+    int imgH = 76;
+    canvas.drawRect(imgX - 1, imgY - 1, imgW + 2, imgH + 2, TFT_LIGHTGRAY);
+
+    if (detectedAltModule == GPS_MOD_UNIT_V11) {
+      drawModuleBitmap(imgX, imgY, imgW, imgH, img_unit_gpsv11);
+    } else {
+      drawModuleBitmap(imgX, imgY, imgW, imgH, img_cap_lora1262);
+    }
+
+    // 4. 右侧模块详细参数与提示
+    int rightX = 100;
+    
+    // 模块名称
+    setUiFont();
+    canvas.setTextColor(0x0011, TFT_WHITE); // 深蓝色
+    canvas.setCursor(rightX, 33);
+    canvas.print((detectedAltModule == GPS_MOD_UNIT_V11) ? "Unit GPS v1.1" : "Cap LoRa-1262");
+
+    // 引脚和波特率
+    canvas.setFont(&fonts::Font0);
+    canvas.setTextColor(TFT_DARKGRAY, TFT_WHITE);
+    canvas.setCursor(rightX, 48);
+    canvas.print((detectedAltModule == GPS_MOD_UNIT_V11) ? "RX:1  TX:2  115200" : "RX:15 TX:13 115200");
+
+    // 提示语句：检测到数据流，是否切换？
+    setUiFont();
+    canvas.setTextColor(TFT_BLACK, TFT_WHITE);
+    canvas.setCursor(rightX, 62);
+    canvas.print(I18n::t(T_DIALOG_GPS_DETECTED_PROMPT));
+
+    // 5. 底部操作按钮指引栏
+    // [Y/Enter] 确认切换
+    canvas.fillRect(rightX - 2, 79, 126, 17, 0xE73F); // 淡蓝微高亮卡片
+    canvas.drawRect(rightX - 2, 79, 126, 17, TFT_BLUE);
+    canvas.setTextColor(TFT_BLUE, 0xE73F);
+    canvas.setCursor(rightX + 4, 82);
+    canvas.print(I18n::t(T_DIALOG_GPS_CONFIRM));
+
+    // [N/ESC] 忽略保持
+    canvas.fillRect(rightX - 2, 99, 126, 17, 0xF7BE); // 浅灰卡片
+    canvas.drawRect(rightX - 2, 99, 126, 17, TFT_LIGHTGRAY);
+    canvas.setTextColor(TFT_DARKGRAY, 0xF7BE);
+    canvas.setCursor(rightX + 4, 102);
+    canvas.print(I18n::t(T_DIALOG_GPS_CANCEL));
+
+    canvas.pushSprite(0, 0);
+  } else {
+    gpsDetectedDialogOpen = false;
+    openMenu = false;
+    renderMap();
+    canvas.pushSprite(0, 0);
+  }
+}
+
 void drawPowerSavingInfo(bool should_I) {
   // 保留原函数，暂时不使用
   if (should_I == true) {
@@ -2514,6 +2606,7 @@ void renderGPSInfo() {
 
 // Cardputer_GPS_Info 核心功能函数
 void saveGPSModuleConfig(GPSModuleType mod, int rx, int tx, int baud) {
+  if (baud <= 0) baud = 115200;
   currentGpsModule = mod;
   gpsRxPin = rx;
   gpsTxPin = tx;
@@ -2565,6 +2658,7 @@ void initGPSSerial(bool should_I) {
   static bool gpsInitialized = false;
   
   if (should_I == true && !gpsInitialized) {
+    if (gpsBaud <= 0) gpsBaud = 115200;
     gnssModule.begin(gpsRxPin, gpsTxPin, gpsBaud); // Start GPS UART.
     gpsInitialized = true;
     // 重新启动搜索模式，使用高刷新率搜星
@@ -2623,6 +2717,94 @@ void serialGPSRead() {
   
   if (gpsSerialState != prevState)
     drawStatus();
+}
+
+/* 嗅探备选 GPS 模块引脚是否有数据流出
+   采用持续非阻塞监听机制：在当前模块Chars RX为0且开启超2秒时，保持Serial2常开监听
+   一旦收到有效字符，立即捕获并自动弹出图片确认对话框
+*/
+void probeAlternateGpsModule() {
+  static bool isProbingOpen = false;
+  static int currentProbeMod = -1;
+
+  if (!gpsSerial || !gnssModule.isModuleInitialized()) {
+    if (isProbingOpen) {
+      Serial2.end();
+      isProbingOpen = false;
+    }
+    if (detectedAltModule != -1) {
+      detectedAltModule = -1;
+      renderEngine.setDetectedAltModule(-1);
+    }
+    return;
+  }
+
+  // 若当前模块已经正常接收到字符，关闭嗅探并重置状态
+  if (gnssModule.getGpsChars() > 0) {
+    if (isProbingOpen) {
+      Serial2.end();
+      isProbingOpen = false;
+    }
+    if (detectedAltModule != -1) {
+      detectedAltModule = -1;
+      renderEngine.setDetectedAltModule(-1);
+    }
+    return;
+  }
+
+  // 刚开启前2秒留给当前硬件串口建立时间
+  if (gnssModule.getSearchDurationMs() < 2000) {
+    return;
+  }
+
+  // 计算备选模块类型与引脚
+  GPSModuleType altMod;
+  int altRx = -1, altTx = -1;
+  long altBaud = 115200;
+
+  if (currentGpsModule == GPS_MOD_CAP_LORA1262) {
+    altMod = GPS_MOD_UNIT_V11;
+    altRx = 1;
+    altTx = 2;
+  } else {
+    altMod = GPS_MOD_CAP_LORA1262;
+    altRx = 15;
+    altTx = 13;
+  }
+
+  // 开启持续非阻塞监听
+  if (!isProbingOpen || currentProbeMod != (int)altMod) {
+    if (isProbingOpen) Serial2.end();
+    Serial2.begin(altBaud, SERIAL_8N1, altRx, altTx);
+    isProbingOpen = true;
+    currentProbeMod = (int)altMod;
+    Serial.printf("[GPS Probe] Started continuous listening on alt RX:%d TX:%d (mod %d)...\n", altRx, altTx, (int)altMod);
+  }
+
+  // 流式非阻塞消费备选串口 FIFO
+  bool foundValidStream = false;
+  while (Serial2.available() > 0) {
+    char c = Serial2.read();
+    if (c == '$' || c == '\n' || c == '\r') {
+      foundValidStream = true;
+      break;
+    }
+  }
+
+  if (foundValidStream) {
+    detectedAltModule = (int)altMod;
+    renderEngine.setDetectedAltModule(detectedAltModule);
+    Serial.printf("[GPS Probe] Successfully detected alternate module %d on RX:%d TX:%d!\n", (int)altMod, altRx, altTx);
+    
+    // 停止嗅探，释放引脚
+    Serial2.end();
+    isProbingOpen = false;
+
+    // 只要尚未被用户明确忽略且弹窗未打开，立即弹出图片确认对话框！
+    if (!gpsDetectedDialogDismissed && !gpsDetectedDialogOpen) {
+      drawGPSModuleDetectedDialog(true);
+    }
+  }
 }
 
 /*    Read the NMEA sentence and dispatch to parsers.
@@ -3207,6 +3389,48 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
   // Check if keyboard has changed state
   if(keyboardChanged) {
     if(keyboardPressed) {
+      // 如果检测到新模块确认弹窗打开，全权接管所有按键
+      if (gpsDetectedDialogOpen) {
+        bool cancelPressed = false;
+        bool confirmPressed = false;
+        if (keys.del) cancelPressed = true;
+        if (keys.enter) confirmPressed = true;
+
+        for (auto key : keys.word) {
+          if (key == '`' || key == 'n' || key == 'N') {
+            cancelPressed = true;
+            break;
+          }
+          if (key == 'y' || key == 'Y') {
+            confirmPressed = true;
+            break;
+          }
+        }
+
+        if (cancelPressed) {
+          gpsDetectedDialogDismissed = true;
+          drawGPSModuleDetectedDialog(false);
+          return;
+        }
+
+        if (confirmPressed) {
+          GPSModuleType targetMod = (GPSModuleType)detectedAltModule;
+          int rx = (targetMod == GPS_MOD_UNIT_V11) ? 1 : 15;
+          int tx = (targetMod == GPS_MOD_UNIT_V11) ? 2 : 13;
+          saveGPSModuleConfig(targetMod, rx, tx, 115200);
+          detectedAltModule = -1;
+          renderEngine.setDetectedAltModule(-1);
+          gpsDetectedDialogDismissed = true;
+          drawGPSModuleDetectedDialog(false);
+          showStatusToast(I18n::getInstance().isChinese() ? 
+            (targetMod == GPS_MOD_UNIT_V11 ? "已切换至: Unit GPS v1.1" : "已切换至: Cap LoRa-1262") :
+            (targetMod == GPS_MOD_UNIT_V11 ? "Switched to: Unit GPS v1.1" : "Switched to: Cap LoRa-1262"));
+          return;
+        }
+
+        return; // 弹窗开启时屏蔽其他所有按键
+      }
+
       // 如果通用文本输入对话框打开，全权接管所有按键
       if (inputDialogOpen) {
         IME& ime = IME::getInstance();
@@ -3627,6 +3851,7 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               gpsSerial = !gpsSerial;
               initGPSSerial(gpsSerial);
               gpsSerialState = gpsSerial ? GPS_ON : GPS_OFF;
+              gpsDetectedDialogDismissed = false; // 重启 GPS 时允许再次弹窗提醒
               if (gpsSerial) {
                 showStatusToast(I18n::t(T_TOAST_GPS_ON));
               } else {
@@ -3636,6 +3861,11 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
               canvas.pushSprite(0, 0);
             }
             lastSPress = currentTime;
+          }
+        } else if ((key == 'y' || key == 'Y') && currentMode == MODE_HIKEPOD) {
+          // 响应调试面板中的备选 GPS 模块自动切换提示，唤出图片确认弹窗
+          if (detectedAltModule != -1 && !settingsMenuOpen && !fileSelectionMenuOpen && !openMenu && !helpMenuVisible && !gpsModuleMenuOpen) {
+            drawGPSModuleDetectedDialog(true);
           }
         } else if (key == 'v' && currentMode == MODE_HIKEPOD) {
           // 切换视图模式
@@ -3687,47 +3917,33 @@ void handleControls(bool keyboardChanged, bool keyboardPressed, Keyboard_Class::
             canvas.pushSprite(0, 0);
           }
         } else if ((key == '=' || key == '+') && !keys.tab && currentMode == MODE_HIKEPOD) {
-          // 视图缩放 - 放大 (+25%)
-          static unsigned long lastEqualPress = 0;
-          const unsigned long EQUAL_DEBOUNCE_DELAY = 150;
-          
-          unsigned long currentTime = millis();
-          if (currentTime - lastEqualPress > EQUAL_DEBOUNCE_DELAY) {
-            lastEqualPress = currentTime;
-            if (currentViewMode == MODE_3D) {
-              renderEngine.zoom3D(1.25f);
-              Serial.println("3D Zoom in");
-              if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
-                renderEngine.center3DOnLocation(currentLocation);
-              }
-            } else if (currentViewMode == MODE_2D) {
-              renderEngine.zoom2D(1.25f);
-              Serial.println("2D Zoom in");
+          // 视图缩放 - 放大 (+25%)，直接响应底层连发实现丝滑线性缩放
+          if (currentViewMode == MODE_3D) {
+            renderEngine.zoom3D(1.25f);
+            Serial.println("3D Zoom in");
+            if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
+              renderEngine.center3DOnLocation(currentLocation);
             }
-            renderMap();
-            canvas.pushSprite(0, 0);
+          } else if (currentViewMode == MODE_2D) {
+            renderEngine.zoom2D(1.25f);
+            Serial.println("2D Zoom in");
           }
+          renderMap();
+          canvas.pushSprite(0, 0);
         } else if ((key == '-' || key == '_') && currentMode == MODE_HIKEPOD) {
-          // 视图缩放 - 缩小 (-20%)
-          static unsigned long lastMinusPress = 0;
-          const unsigned long MINUS_DEBOUNCE_DELAY = 150;
-          
-          unsigned long currentTime = millis();
-          if (currentTime - lastMinusPress > MINUS_DEBOUNCE_DELAY) {
-            lastMinusPress = currentTime;
-            if (currentViewMode == MODE_3D) {
-              renderEngine.zoom3D(0.8f);
-              Serial.println("3D Zoom out");
-              if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
-                renderEngine.center3DOnLocation(currentLocation);
-              }
-            } else if (currentViewMode == MODE_2D) {
-              renderEngine.zoom2D(0.8f);
-              Serial.println("2D Zoom out");
+          // 视图缩放 - 缩小 (-20%)，直接响应底层连发实现丝滑线性缩放
+          if (currentViewMode == MODE_3D) {
+            renderEngine.zoom3D(0.8f);
+            Serial.println("3D Zoom out");
+            if (renderEngine.isLocationLockedState() && currentLocation.isValid) {
+              renderEngine.center3DOnLocation(currentLocation);
             }
-            renderMap();
-            canvas.pushSprite(0, 0);
+          } else if (currentViewMode == MODE_2D) {
+            renderEngine.zoom2D(0.8f);
+            Serial.println("2D Zoom out");
           }
+          renderMap();
+          canvas.pushSprite(0, 0);
         } else if ((key == 'r' || key == 'R') && currentMode == MODE_HIKEPOD) {
           // 'r' 键切换 3D 旋转中心（起点 / 网格中心）
           if (currentViewMode == MODE_3D) {

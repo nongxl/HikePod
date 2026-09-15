@@ -11,6 +11,8 @@ struct TrackWaypoint {
   Location loc;
   String timeStr;
   uint64_t timeMs;
+  float speed;      // 速度 (m/s)
+  float accuracy;   // 精度 (HDOP/水平误差)
 };
 
 class TrackingManager {

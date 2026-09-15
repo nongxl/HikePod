@@ -144,10 +144,13 @@ bool TrackingManager::addWaypoint(const String& name, const Location& loc) {
   wp.loc = loc;
   wp.timeStr = getIsoTimeString();
   wp.timeMs = getEpochTimeMs();
+  float spdKmph = (gnssModule) ? (float)gnssModule->getSpeedKmph() : loc.speed;
+  wp.speed = (spdKmph > 0.1f) ? (spdKmph / 3.6f) : 0.0f;
+  wp.accuracy = (gnssModule) ? (float)gnssModule->getHDOP() : 0.0f;
   
   waypoints.push_back(wp);
-  Serial.printf("[Tracking] Inserted Waypoint #%d: '%s' at (%.6f, %.6f, %.1fm)\n",
-                waypoints.size(), wp.name.c_str(), loc.latitude, loc.longitude, loc.altitude);
+  Serial.printf("[Tracking] Inserted Waypoint #%d: '%s' at (%.6f, %.6f, %.1fm), Spd: %.1fm/s, Acc: %.1f\n",
+                waypoints.size(), wp.name.c_str(), loc.latitude, loc.longitude, loc.altitude, wp.speed, wp.accuracy);
   return true;
 }
 
@@ -224,6 +227,28 @@ String TrackingManager::getIsoTimeString() const {
 }
 
 uint64_t TrackingManager::getEpochTimeMs() const {
+  if (gnssModule && gnssModule->isDateValid() && gnssModule->isTimeValid()) {
+    int y = gnssModule->getYear();
+    int m = gnssModule->getMonth();
+    int d = gnssModule->getDay();
+    int hh = gnssModule->getHour();
+    int mm = gnssModule->getMinute();
+    int ss = gnssModule->getSecond();
+    
+    // 基于格里高利历法计算自 1970-01-01 00:00:00 UTC 起的真实秒数
+    int y1 = y;
+    int m1 = m;
+    if (m1 <= 2) {
+      y1 -= 1;
+      m1 += 12;
+    }
+    long days = 365L * y1 + y1 / 4 - y1 / 100 + y1 / 400 + (153 * (m1 - 3) + 2) / 5 + d - 1;
+    long daysSince1970 = days - 719468L;
+    uint64_t epochSec = (uint64_t)daysSince1970 * 86400ULL + hh * 3600ULL + mm * 60ULL + ss;
+    return epochSec * 1000ULL;
+  }
+  
+  // 回退：读取系统 RTC 时钟
   struct timeval tv;
   gettimeofday(&tv, nullptr);
   return ((uint64_t)tv.tv_sec * 1000ULL) + ((uint64_t)tv.tv_usec / 1000ULL);
@@ -284,6 +309,8 @@ void TrackingManager::generateFinalKML() {
   kml.printf("      <Data name=\"BeginTime\"><value>%llu</value></Data>\n", (unsigned long long)beginTimeEpochMs);
   kml.printf("      <Data name=\"EndTime\"><value>%llu</value></Data>\n", (unsigned long long)endTimeEpochMs);
   kml.printf("      <Data name=\"TimeUsed\"><value>%lu</value></Data>\n", timeUsedMs);
+  kml.print("      <Data name=\"PauseTime\"><value>0</value></Data>\n");
+  kml.print("      <Data name=\"color\"><value>ee0000ff</value></Data>\n");
   kml.printf("      <Data name=\"Distance\"><value>%.1f</value></Data>\n", totalDistance);
   kml.printf("      <Data name=\"ElevationGain\"><value>%.2f</value></Data>\n", elevationGain);
   kml.printf("      <Data name=\"ElevationLoss\"><value>%.2f</value></Data>\n", elevationLoss);
@@ -338,6 +365,8 @@ void TrackingManager::generateFinalKML() {
     kml.print("        <ExtendedData>\n");
     kml.printf("          <Data name=\"ServerId\"><value>%u</value></Data>\n", (unsigned int)(i + 1));
     kml.print("          <Data name=\"PosType\"><value>0</value></Data>\n");
+    kml.printf("          <Data name=\"Speed\"><value>%.1f</value></Data>\n", wp.speed);
+    kml.printf("          <Data name=\"Accuracy\"><value>%.1f</value></Data>\n", wp.accuracy);
     kml.printf("          <Data name=\"Time\"><value>%llu</value></Data>\n", (unsigned long long)wp.timeMs);
     kml.print("        </ExtendedData>\n");
     kml.print("      </Placemark>\n");

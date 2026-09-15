@@ -6,6 +6,7 @@
 #include <M5GFX.h>
 #include "KMLParser.h"
 #include "SatData.h"
+#include "I18n.h"
 
 // 缩放级别定义：每个级别对应屏幕宽度覆盖的真实距离（米）
 enum MapZoom {
@@ -120,6 +121,9 @@ public:
   // 绘制电量信息
   void drawBatteryInfo();
   
+  // 绘制屏幕顶部中央时间信息
+  void drawTopTimeInfo();
+  
   // 使用内存池绘制轨迹（更高效，避免复制大量点）
   void drawRouteFromPool(const Location* pointPool, int pointCount);
   
@@ -168,6 +172,9 @@ public:
   // 3D渲染核心方法
   void render3D(const std::vector<Location>& routePoints, const Location& currentLocation, const std::vector<Location>& trackPoints = std::vector<Location>(), bool sdInitialized = false, bool hasRoute = false, const Location* pointPool = nullptr, int pointCount = 0, const POI* poiPool = nullptr, int poiCount = 0, int showPOIsMode = 0);
   
+  // 备选 GPS 模块嗅探结果存取
+  void setDetectedAltModule(int mod) { detectedAltModule = mod; }
+  int getDetectedAltModule() const { return detectedAltModule; }
   
 private:
   int screenWidth;
@@ -407,6 +414,7 @@ private:
   int lastPoiCount = 0;
   const Location* lastPointPoolPtr = nullptr;
   int lastPointCount = 0;
+  int detectedAltModule = -1;
 };
 
 #endif // RENDER_ENGINE_H
